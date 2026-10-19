@@ -21,3 +21,4 @@ Cada ADR conserva una decisión difícil de revertir, las alternativas y la cond
 | [ADR-0015](ADR-0015-un-issue-por-grupo.md) | Un issue de GitHub por grupo externo. |
 | [ADR-0016](ADR-0016-coste-y-reintentos.md) | Tope de coste y reintentos. |
 | [ADR-0017](ADR-0017-targets-como-coleccion.md) | El blanco es una colección de targets. |
+| [ADR-0018](ADR-0018-sentry-en-el-despliegue.md) | Sentry se elige al desplegar el target. |

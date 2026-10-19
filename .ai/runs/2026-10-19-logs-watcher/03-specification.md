@@ -65,11 +65,23 @@ Un target ata una aplicación: su repositorio de GitHub, su proyecto de Sentry y
 
 `owner` y `name` son configuración obligatoria de despliegue para que ese target actúe. Hasta que estén configurados, la GitHub App no tiene dónde instalarse y no se abre ningún issue. Una configuración vacía (`targets` vacío, o un target con `owner` o `name` vacíos) es válida. El resto de la especificación no queda bloqueada por no conocer el repositorio hoy.
 
-OQ-2, OQ-3 y OQ-4 siguen abiertas y se responden para ese primer target. Sus valores son configuración de ese target.
+OQ-3 y OQ-4 siguen abiertas y se responden para ese primer target. OQ-2 está cerrada: la organización, el slug y `productionEnvironments` de Sentry son configuración de despliegue de cada target (ADR-0018).
 
 Un target está activo solo cuando `github.owner` y `github.name`, ya recortados, no están vacíos. Un target inactivo no llama a GitHub, a Sentry ni a PostHog y no abre issues. El webhook de Sentry de ese `id` responde 200, guarda la entrega y la marca `target_inactive`. Un `id` que no está en `targets` responde 404. Un evento de GitHub cuyo repositorio no coincide con ningún target activo responde 200 y no encola.
 
 `id` del target coincide con `^[a-z0-9][a-z0-9-]{0,39}$`. En el ejemplo, `primary` es solo la clave de esa entrada. No es un owner ni un nombre de repositorio. La rama base no se configura: se lee `default_branch` del repositorio de ese target cuando el target está activo.
+
+### Sentry del target
+
+Decisión cerrada en ADR-0018. OQ-2 ya no es una pregunta de producto.
+
+La organización de Sentry la elige el operador al configurar el target. La especificación no fija ninguna organización y no inventa una.
+
+La misma regla vale para el slug del proyecto y para los nombres exactos de `productionEnvironments`: son configuración del operador, sin valores inventados.
+
+`baseUrl` vale `https://sentry.io` si el operador no la escribe o la deja vacía. El operador puede sustituirla.
+
+Si `productionEnvironments` está vacío, la vía Sentry de ese target descarta todos los eventos a propósito, para no tratar staging como producción. El servicio no elige esos nombres. Con `org` vacío, slug vacío o `productionEnvironments` vacío no se abre ningún issue de Sentry. Esos tres campos siguen siendo configuración obligatoria de despliegue del target. Una lista vacía es configuración válida.
 
 ### Configuración que el servicio no inventa
 
@@ -124,7 +136,7 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
 }
 ```
 
-`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `funnels[].id` es estable. Cada paso tiene `event`. No hay pasos por defecto. El tope de coste sigue siendo del proceso, compartido por todos los targets.
+`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `sentry.baseUrl` vacío u omitido vale `https://sentry.io`. `sentry.org`, `sentry.project` y `sentry.productionEnvironments` no tienen valor por defecto. `funnels[].id` es estable. Cada paso tiene `event`. No hay pasos por defecto. El tope de coste sigue siendo del proceso, compartido por todos los targets.
 
 Variables de entorno, también fuera de git:
 
@@ -163,11 +175,11 @@ Firma: HMAC-SHA256 en hexadecimal del cuerpo crudo, cabecera `Sentry-Hook-Signat
 
 Clave de entrega de Sentry, ya prefijada: `{targetId}:{Request-ID}` o, si falta la cabecera, `{targetId}:{SHA-256 del cuerpo}`. Repetida: 200 y fin. GitHub usa `X-GitHub-Delivery`.
 
-Si el target está inactivo, el job no llega a crearse. Si está activo y `sentry.org` o `sentry.project` están vacíos, el job termina con `config_missing` y no llama a la API. Con la configuración puesta, el worker lee el último evento y descarta en este orden:
+Si el target está inactivo, el job no llega a crearse. Si está activo y `sentry.org`, `sentry.project` o `productionEnvironments` están vacíos, el job termina sin llamar a la API y sin abrir un issue de Sentry. Org o slug vacíos se marcan `config_missing`. `productionEnvironments` vacío se marca `production_environments_empty`. Con org, slug y al menos un entorno, el worker lee el último evento y descarta en este orden:
 
 1. El tipo del evento es `transaction`.
 2. `level` es `info` o `debug`.
-3. `productionEnvironments` está vacío, o `environment` no está en esa lista.
+3. `environment` no está en `productionEnvironments`.
 4. El título contiene, sin distinguir mayúsculas, algún `ignoreTitlePatterns`.
 5. Hay un estado HTTP entre 400 y 499 y el proceso no está terminado (la regla de `processTerminated` de más abajo). Motivo `handled_4xx`.
 
@@ -177,7 +189,7 @@ Al empezar `classify_and_file` el worker pone `groups.dirty` en falso. Si durant
 
 ### Datos que se leen de Sentry
 
-`GET {baseUrl}/api/0/issues/{id}/` y `GET {baseUrl}/api/0/issues/{id}/events/latest/`.
+`GET {baseUrl}/api/0/issues/{id}/` y `GET {baseUrl}/api/0/issues/{id}/events/latest/`. `baseUrl` es la del target. Si falta o está vacía, es `https://sentry.io`.
 
 Se usan, y nada más para decidir: `exception.values[].mechanism.handled`, `exception.values[].mechanism.type`, `exception.values[].type`, `exception.values[].value`, `exception.values[].stacktrace.frames[]` (`filename`, `function`, `lineNo`, `inApp`), tags `handled`, `transaction`, `url`, `environment`, `release`, `contexts.response.status_code`, tag `http.status_code`, `level`, `userCount`, `count`, `stats.24h`, `permalink`, `culprit`, `title`, `release`. De `user` solo importa si la clave existe. No se copia `id`, `email` ni `ip_address`.
 
@@ -626,15 +638,9 @@ Tasa de salida: GitHub 4 solicitudes por segundo, Sentry 2, PostHog 1. Ante 429 
 
 OQ-1 está cerrada. El blanco es una colección de targets (ADR-0017 y la sección Targets de Alcance). `owner` y `name` no son una pregunta de producto: son configuración de despliegue del target, sin valor por defecto.
 
-Siguen abiertas tres preguntas, las tres sobre el primer target. El implementador no inventa un valor para ellas. Mientras falten, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
+OQ-2 está cerrada. Organización, slug y `productionEnvironments` de Sentry no son una pregunta de producto: son configuración de despliegue de cada target (ADR-0018 y la sección Sentry del target). `baseUrl` vale `https://sentry.io` salvo que el operador ponga otra. Con org vacío, slug vacío o `productionEnvironments` vacío no se abre ningún issue de Sentry.
 
-<a id="oq-2"></a>
-
-### OQ-2. Proyecto de Sentry y entornos de producción
-
-Para el primer target, ¿cuál es la organización, el slug del proyecto, la `baseUrl` si no es `https://sentry.io`, y la lista exacta de `environment` que cuentan como producción?
-
-La respuesta rellena `sentry` de esa entrada. No elige el repositorio. Con `productionEnvironments` vacío la vía Sentry de ese target descarta todos los eventos a propósito, para no tratar staging como producción. El servicio no elige esos nombres.
+Siguen abiertas dos preguntas, las dos sobre el primer target. El implementador no inventa un valor para ellas. Mientras falten, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
 
 <a id="oq-3"></a>
 
