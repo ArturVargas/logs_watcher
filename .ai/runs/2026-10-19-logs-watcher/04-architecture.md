@@ -48,10 +48,10 @@ Jobs y claves:
 
 | `kind` | `dedupe_key` |
 | --- | --- |
-| `classify_and_file` | `classify:{sentryIssueId}` |
+| `classify_and_file` | `classify:{targetId}:{sentryIssueId}` |
 | `propose_fix` | `fix:{generationKey}` |
 | `docs_drift` | `docs:{generationKey}` |
-| `posthog_scan` | `posthog:{windowEndUtcHour}` |
+| `posthog_scan` | `posthog:{targetId}:{windowEndUtcHour}` |
 
 Si llega otro evento de Sentry con el job de ese grupo en `queued` o `running`, solo se pone `groups.dirty`. Al terminar, si `dirty` es verdadero, el mismo row vuelve a `queued`. No se inserta una segunda clave.
 
@@ -165,6 +165,7 @@ Esquema que la implementación debe crear. Los nombres de columna son el contrat
 CREATE TABLE inbox (
   delivery_id text PRIMARY KEY,
   source text NOT NULL,
+  target_id text,
   received_at timestamptz NOT NULL,
   payload jsonb,
   status text NOT NULL,
@@ -172,18 +173,21 @@ CREATE TABLE inbox (
 );
 
 CREATE TABLE groups (
-  sentry_issue_id text PRIMARY KEY,
+  target_id text NOT NULL,
+  sentry_issue_id text NOT NULL,
   github_issue_number integer,
   latest_event_id text,
   class text,
   priority text,
   dirty boolean NOT NULL DEFAULT false,
   progress_stale boolean NOT NULL DEFAULT false,
-  updated_at timestamptz NOT NULL
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (target_id, sentry_issue_id)
 );
 
 CREATE TABLE proposals (
   id uuid PRIMARY KEY,
+  target_id text NOT NULL,
   kind text NOT NULL,
   generation_key text NOT NULL UNIQUE,
   state text NOT NULL,
@@ -214,6 +218,7 @@ CREATE INDEX jobs_ready ON jobs (state, run_after);
 
 CREATE TABLE findings (
   dedupe_key text PRIMARY KEY,
+  target_id text NOT NULL,
   finding_type text NOT NULL,
   github_issue_number integer,
   window_end timestamptz NOT NULL,
@@ -243,7 +248,7 @@ CREATE TABLE worker_heartbeat (
 );
 ```
 
-`target_hash` es el SHA-256 de los blobs de los archivos parcheados, ordenados por path, en el momento de la propuesta. `payload` de una propuesta guarda el JSON ya validado y depurado, no el webhook crudo.
+`delivery_id` de Sentry es `{targetId}:{Request-ID}` o `{targetId}:{sha256 del cuerpo}`. El de GitHub es `X-GitHub-Delivery`. `target_id` es el `id` de la entrada de `targets`, no el owner del repositorio. `target_hash` es el SHA-256 de los blobs de los archivos parcheados, ordenados por path, en el momento de la propuesta. `payload` de una propuesta guarda el JSON ya validado y depurado, no el webhook crudo. La forma de `targets` está en la especificación, sección Targets. El servicio recorre esa lista; no tiene un repositorio único grabado en código.
 
 Retención, un job diario `retention`:
 
@@ -257,7 +262,7 @@ El clon de trabajo vive en `/var/lib/logs-watcher/work/{proposalId}` y se borra 
 
 ## Seguridad y permisos
 
-Superficie pública, detrás de TLS: `POST /webhooks/sentry`, `POST /webhooks/github`, `GET /healthz`. `GET /metrics` solo en `127.0.0.1:9090`. No hay UI de administración.
+Superficie pública, detrás de TLS: `POST /webhooks/sentry/{targetId}`, `POST /webhooks/github`, `GET /healthz`. `GET /metrics` solo en `127.0.0.1:9090`. No hay UI de administración. El evento de GitHub se enruta al target activo con el mismo owner y name. Si ninguno coincide, se responde 200 y no se encola.
 
 `/healthz` responde 200 con `{"ok":true,"db":"up"}` si `SELECT 1` funciona. No incluye versiones de secretos ni conteos de issues.
 
@@ -298,9 +303,9 @@ El comando `/logs-watcher` solo se acepta desde `issue_comment` con firma de Git
   1. Usuario de sistema `logs-watcher`, sin shell de login, home `/var/lib/logs-watcher`.
   2. Postgres 16 solo en localhost. `pg_dump` diario a `/var/backups/logs-watcher/`, siete copias, sin sacarlas del VPS.
   3. Unidad systemd `logs-watcher.service`, `Restart=on-failure`, variables de entorno desde un archivo de modo `600`.
-  4. Terminación TLS. Al proxy solo llegan los tres paths públicos.
-  5. Crear la GitHub App con los permisos de arriba e instalarla en el repositorio de OQ-1. Crear el webhook de Sentry con el secreto del cliente.
-  6. Rellenar la configuración con OQ-1, y con OQ-2, OQ-3 y OQ-4 cuando Artur las responda. Cada respuesta que falte deja esa vía en `config_missing`, sin llamadas a ese proveedor.
+  4. Terminación TLS. Al proxy solo llegan `/webhooks/sentry/`, `/webhooks/github` y `/healthz`.
+  5. Crear la GitHub App con los permisos de arriba. Instalarla cuando un target tenga `owner` y `name`. Hasta entonces no hay repositorio de destino y no se abre ningún issue. El webhook de Sentry de cada target usa el secreto nombrado en su configuración.
+  6. Rellenar el primer target con OQ-2, OQ-3 y OQ-4 cuando Artur las responda. `owner` y `name` se rellenan en el despliegue, sin valor por defecto. Cada dato que falte deja esa vía de ese target en `config_missing` o el target inactivo, sin llamadas a ese proveedor.
   7. Arrancar con `LOGS_WATCHER_DRY_RUN=true`. Revisar al menos diez filas de clasificación o propuestas guardadas, sin escritura en GitHub.
   8. Pasar `LOGS_WATCHER_DRY_RUN=false` es un cambio de configuración consciente, no el valor inicial.
 - Monitoreo y alertas: las métricas y los códigos de alerta están en la especificación, sección Observabilidad. `msg` de log es un código estable. Los que esta operación exige son `webhook_rejected`, `event_dropped`, `job_dead`, `budget_deferred`, `proposal_stale`, `config_missing`, `docs_prefilter_empty_large_corpus`, `docs_diff_too_large`, `docs_map_invalid`.
@@ -326,7 +331,7 @@ Runbook corto:
 
 ## Riesgos y decisiones abiertas
 
-No hay decisiones abiertas en este documento. Las cuatro que Artur tiene que cerrar están en `03-specification.md`, sección Decisiones abiertas (`#oq-1` a `#oq-4`).
+No hay decisiones abiertas en este documento. OQ-1 está cerrada en ADR-0017. Las tres que Artur tiene que cerrar están en `03-specification.md`, sección Decisiones abiertas (`#oq-2`, `#oq-3`, `#oq-4`), y se responden para el primer target.
 
 Riesgos que se aceptan en la fase 1:
 

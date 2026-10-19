@@ -6,9 +6,9 @@
 
 ## Decisión
 
-Sentry: un issue de GitHub por `sentry_issue_id`, durante toda la vida de ese id. Un evento nuevo actualiza conteos y, si hace falta, la evidencia. No abre otro issue. Si el issue de GitHub está cerrado y llega otro evento aceptado, el servicio lo reabre y comenta.
+Sentry: un issue de GitHub por par `targetId` y `sentry_issue_id`, durante toda la vida de ese par. Un evento nuevo actualiza conteos y, si hace falta, la evidencia. No abre otro issue en ese repositorio. Si el issue de GitHub está cerrado y llega otro evento aceptado, el servicio lo reabre y comenta.
 
-PostHog: un issue de GitHub por `dedupe_key` (tipo, pathname y firma definidos en la especificación), también de por vida. El barrido siguiente actualiza el bloque de conteos o comenta. Si está cerrado, lo reabre.
+PostHog: un issue de GitHub por `dedupe_key` (target, tipo, pathname y firma definidos en la especificación), también de por vida. El barrido siguiente actualiza el bloque de conteos o comenta. Si está cerrado, lo reabre.
 
 El servicio no calcula otro fingerprint encima del de Sentry.
 

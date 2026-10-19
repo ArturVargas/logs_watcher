@@ -51,35 +51,67 @@ Cubre errores mostrados (`$exception`), fricción (`$rageclick`, `$dead_click`),
 
 ### Fases posteriores
 
-No se construyen ahora. El diseño no las cierra por dentro: el puerto `IssueTracker` admite otro adaptador (Linear, ADR-0001) y el puerto `DocsPublisher` admite otro publicador (Mintlify, ADR-0002). Los embeddings de docs quedan fuera hasta que un ADR nuevo los active (ADR-0012). Ampliar el auto-fix a otras clases exige reabrir ADR-0011.
+No se construyen ahora. El diseño no las cierra por dentro: el puerto `IssueTracker` admite otro adaptador (Linear, ADR-0001) y el puerto `DocsPublisher` admite otro publicador (Mintlify, ADR-0002). Los embeddings de docs quedan fuera hasta que un ADR nuevo los active (ADR-0012). Ampliar el auto-fix a otras clases exige reabrir ADR-0011. Añadir otro repositorio no es una fase posterior: es otra entrada en `targets` (ADR-0017).
+
+### Targets
+
+Decisión cerrada en ADR-0017. OQ-1 ya no es una pregunta de producto.
+
+El `owner` y el `name` de GitHub de la aplicación vigilada siguen sin conocerse. No hay repositorio por defecto y esta especificación no inventa uno.
+
+El MVP vigila un solo proyecto. El servicio modela el blanco como una colección desde el principio: hoy puede haber una entrada y más adelante varias. Añadir repositorios o aplicaciones es configuración, no un rediseño.
+
+Un target ata una aplicación: su repositorio de GitHub, su proyecto de Sentry y su proyecto de PostHog.
+
+`owner` y `name` son configuración obligatoria de despliegue para que ese target actúe. Hasta que estén configurados, la GitHub App no tiene dónde instalarse y no se abre ningún issue. Una configuración vacía (`targets` vacío, o un target con `owner` o `name` vacíos) es válida. El resto de la especificación no queda bloqueada por no conocer el repositorio hoy.
+
+OQ-2, OQ-3 y OQ-4 siguen abiertas y se responden para ese primer target. Sus valores son configuración de ese target.
+
+Un target está activo solo cuando `github.owner` y `github.name`, ya recortados, no están vacíos. Un target inactivo no llama a GitHub, a Sentry ni a PostHog y no abre issues. El webhook de Sentry de ese `id` responde 200, guarda la entrega y la marca `target_inactive`. Un `id` que no está en `targets` responde 404. Un evento de GitHub cuyo repositorio no coincide con ningún target activo responde 200 y no encola.
+
+`id` del target coincide con `^[a-z0-9][a-z0-9-]{0,39}$`. En el ejemplo, `primary` es solo la clave de esa entrada. No es un owner ni un nombre de repositorio. La rama base no se configura: se lee `default_branch` del repositorio de ese target cuando el target está activo.
 
 ### Configuración que el servicio no inventa
 
-Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso arranca aunque falten los datos de las decisiones abiertas: la vía correspondiente no llama a ese proveedor y registra `config_missing`.
+Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso arranca con `targets` vacío o con entradas inactivas. Si a un target activo le falta un proveedor, esa vía de ese target no llama al proveedor y registra `config_missing`.
 
 ```json
 {
-  "appRepo": { "owner": "", "name": "" },
-  "sentry": {
-    "baseUrl": "https://sentry.io",
-    "org": "",
-    "project": "",
-    "productionEnvironments": [],
-    "blockerTransactions": ["/", "/login", "/signup", "/auth/callback"],
-    "ignoreTitlePatterns": [
-      "ResizeObserver loop",
-      "AbortError",
-      "Network request failed",
-      "Load failed",
-      "Non-Error promise rejection captured"
-    ]
-  },
-  "posthog": {
-    "host": "",
-    "projectId": "",
-    "validationEvents": [],
-    "funnels": []
-  },
+  "targets": [
+    {
+      "id": "primary",
+      "github": { "owner": "", "name": "", "installationId": "" },
+      "sentry": {
+        "baseUrl": "https://sentry.io",
+        "org": "",
+        "project": "",
+        "webhookSecretEnv": "SENTRY_WEBHOOK_SECRET",
+        "authTokenEnv": "SENTRY_AUTH_TOKEN",
+        "productionEnvironments": [],
+        "blockerTransactions": ["/", "/login", "/signup", "/auth/callback"],
+        "ignoreTitlePatterns": [
+          "ResizeObserver loop",
+          "AbortError",
+          "Network request failed",
+          "Load failed",
+          "Non-Error promise rejection captured"
+        ]
+      },
+      "posthog": {
+        "host": "",
+        "projectId": "",
+        "apiKeyEnv": "POSTHOG_API_KEY",
+        "validationEvents": [],
+        "funnels": []
+      },
+      "llm": {
+        "baseUrlEnv": "LLM_BASE_URL",
+        "apiKeyEnv": "LLM_API_KEY",
+        "modelEnv": "LLM_MODEL"
+      },
+      "testCommand": null
+    }
+  ],
   "limits": {
     "dailyBudgetUsd": 5,
     "inputUsdPerMillion": 0.4,
@@ -88,12 +120,11 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
     "maxFixChangedLines": 400,
     "promptCharCap": 80000,
     "maxOutputTokens": 4096
-  },
-  "testCommand": null
+  }
 }
 ```
 
-`testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `appRepo.baseBranch` no se configura: se lee de la API de GitHub (`default_branch`). `funnels[].id` es estable. Cada paso tiene `event`. No hay pasos por defecto.
+`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `funnels[].id` es estable. Cada paso tiene `event`. No hay pasos por defecto. El tope de coste sigue siendo del proceso, compartido por todos los targets.
 
 Variables de entorno, también fuera de git:
 
@@ -102,11 +133,13 @@ Variables de entorno, también fuera de git:
 | `DATABASE_URL` | El proceso no arranca. |
 | `LOGS_WATCHER_CONFIG` | Ruta por defecto `/etc/logs-watcher/config.json`. |
 | `LOGS_WATCHER_DRY_RUN` | Por defecto `true` hasta que una persona lo ponga en `false`. |
-| `SENTRY_WEBHOOK_SECRET`, `SENTRY_AUTH_TOKEN` | La vía Sentry no procesa. |
-| `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_INSTALLATION_ID` | No hay escritura ni lectura de GitHub. La clave por defecto es `/etc/logs-watcher/github-app.pem`. |
-| `POSTHOG_API_KEY` | No hay barrido de PostHog. |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No hay llamadas al modelo. La plantilla determinista sigue en pie. |
+| `SENTRY_WEBHOOK_SECRET`, `SENTRY_AUTH_TOKEN` | La vía Sentry del target que las referencia no procesa. |
+| `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_INSTALLATION_ID` | No hay escritura ni lectura de GitHub. La clave por defecto es `/etc/logs-watcher/github-app.pem`. `GITHUB_INSTALLATION_ID` solo se usa si el target deja `installationId` vacío. |
+| `POSTHOG_API_KEY` | No hay barrido de PostHog del target que la referencia. |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No hay llamadas al modelo del target que las referencia. La plantilla determinista sigue en pie. |
 | `ALERT_WEBHOOK_URL` | Las alertas quedan solo en el log y en la tabla `alerts`. |
+
+Esos nombres son los que referencia el target de ejemplo. Otro target puede nombrar otras variables. Si la variable que ese target referencia no está, esa vía de ese target no llama al proveedor. `GITHUB_INSTALLATION_ID` vacío y `github.installationId` vacío impiden la API de GitHub de ese target aunque owner y name ya estén puestos.
 
 ## Fuera de alcance
 
@@ -114,7 +147,7 @@ Variables de entorno, también fuera de git:
 - Arreglo automático de hallazgos de PostHog, de clases `non-blocking`, `no-user-impact` y `unclassified`, y de cualquier evento filtrado.
 - Descargar o enlazar session replay. Guardar `distinct_id`, correo, IP o texto libre de la UI.
 - Linear, Mintlify y embeddings.
-- Alta disponibilidad, más de un worker y un segundo repositorio vigilado.
+- Alta disponibilidad y más de un worker. Vigilar otro repositorio no está fuera de alcance: es otra entrada de `targets`.
 - Editar workflows de CI, lockfiles, manifiestos de dependencias o archivos de `.github/`.
 - Ejecutar como instrucción el texto que venga en un stack, un diff o un comentario que no sea un comando exacto.
 - Fusionar PRs, activar auto-merge o aprobar con la propia App.
@@ -124,13 +157,13 @@ Variables de entorno, también fuera de git:
 
 ### Filtro de un evento de Sentry
 
-El webhook responde en menos de 2 segundos: verifica la firma, inserta `inbox` y, si el recurso se acepta, encola `classify_and_file`. No descarta por entorno ni por `handled` en el request. Esos filtros corren en el worker, cuando ya leyó el último evento.
+El webhook de Sentry es `POST /webhooks/sentry/{targetId}`. Responde en menos de 2 segundos: verifica la firma con la variable nombrada en `webhookSecretEnv` de ese target, inserta `inbox` con clave `{targetId}:{delivery}` y, si el recurso se acepta y el target está activo, encola `classify_and_file`. No descarta por entorno ni por `handled` en el request. Esos filtros corren en el worker, cuando ya leyó el último evento.
 
-Firma: HMAC-SHA256 en hexadecimal del cuerpo crudo, cabecera `Sentry-Hook-Signature`, comparación en tiempo constante. Si `Sentry-Hook-Timestamp` viene y se aleja más de 300 segundos, se responde 401 y no se inserta. Recursos aceptados: `issue` (acciones `created` y `unresolved`) y `event_alert`. El resto, con firma válida, responde 204 y no encola.
+Firma: HMAC-SHA256 en hexadecimal del cuerpo crudo, cabecera `Sentry-Hook-Signature`, comparación en tiempo constante. Si `Sentry-Hook-Timestamp` viene y se aleja más de 300 segundos, se responde 401 y no se inserta. Recursos aceptados: `issue` (acciones `created` y `unresolved`) y `event_alert`. El resto, con firma válida, responde 204 y no encola. El webhook de GitHub es uno, `POST /webhooks/github`, y se enruta por `repository.owner.login` y `repository.name` al target activo.
 
-Clave de entrega: `Request-ID` o, si falta, SHA-256 del cuerpo. Repetida: 200 y fin.
+Clave de entrega de Sentry, ya prefijada: `{targetId}:{Request-ID}` o, si falta la cabecera, `{targetId}:{SHA-256 del cuerpo}`. Repetida: 200 y fin. GitHub usa `X-GitHub-Delivery`.
 
-Si `sentry.org` o `sentry.project` están vacíos, el job termina con `config_missing` y no llama a la API. Con la configuración puesta, el worker lee el último evento y descarta en este orden:
+Si el target está inactivo, el job no llega a crearse. Si está activo y `sentry.org` o `sentry.project` están vacíos, el job termina con `config_missing` y no llama a la API. Con la configuración puesta, el worker lee el último evento y descarta en este orden:
 
 1. El tipo del evento es `transaction`.
 2. `level` es `info` o `debug`.
@@ -140,7 +173,7 @@ Si `sentry.org` o `sentry.project` están vacíos, el job termina con `config_mi
 
 Lo descartado actualiza la fila de `inbox` con el motivo y termina el job en `done`. No abre issue. Variables locales del frame (`vars`) se eliminan antes de guardar y antes de cualquier prompt.
 
-Al empezar `classify_and_file` el worker pone `groups.dirty` en falso. Si durante el job llega otro evento del mismo id, solo marca `dirty`. Al terminar, si `dirty` es verdadero, el mismo row vuelve a `queued`. No se inserta otro job.
+Al empezar `classify_and_file` el worker pone `groups.dirty` en falso. Si durante el job llega otro evento del mismo target y del mismo id de Sentry, solo marca `dirty`. Al terminar, si `dirty` es verdadero, el mismo row vuelve a `queued`. No se inserta otro job. La clave del grupo es `targetId` más `sentryIssueId`.
 
 ### Datos que se leen de Sentry
 
@@ -279,20 +312,20 @@ Etiquetas que el servicio crea si no existen: `logs-watcher` (`1d4ed8`), `logs-w
 
 El servicio solo reemplaza los bloques `logs-watcher-facts`, `logs-watcher-severity`, `logs-watcher-evidence` y `logs-watcher-progress`, y solo si cada par de marcadores aparece una sola vez (ADR-0008). El comentario de generación del encabezado es el de la creación y no se reescribe. Hechos y severidad se actualizan en cada evento aceptado. La etiqueta `severity:*` y, si aplica, `priority:*` se sustituyen por la clase nueva. La evidencia se reemplaza solo si cambió el frame superior (`filename` más `function`). Si un bloque no está o está repetido, se comenta y se marca `progress_stale`. No se reescribe el issue entero.
 
-`generationKey` del issue de Sentry: SHA-256 hexadecimal de `issue\n{sentryIssueId}\n{latestEventId}`.
+`generationKey` del issue de Sentry: SHA-256 hexadecimal de `issue\n{targetId}\n{sentryIssueId}\n{latestEventId}`.
 
 ### Agrupación y deduplicación
 
 - La clave de grupo de Sentry es el id de issue de Sentry. No se calcula otro fingerprint (ADR-0015).
 - Antes de crear, se busca la fila local y el marcador `logs-watcher-sentry-issue: {id}` en GitHub. Si la búsqueda devuelve varios, se usa el número menor y se comenta en los demás `duplicado de #{n}` sin cerrarlos.
 - Un evento posterior del mismo id actualiza el mismo issue. Si estaba cerrado, se reabre.
-- PostHog usa `dedupeKey` = SHA-256 de `posthog\n{type}\n{pathname}\n{signature}`. Misma regla de un issue de por vida.
+- PostHog usa `dedupeKey` = SHA-256 de `posthog\n{targetId}\n{type}\n{pathname}\n{signature}`. Misma regla de un issue de por vida, dentro de ese target.
 - Firmas: `error-shown` es tipo de excepción más el mensaje en minúsculas, con las tandas de dígitos cambiadas por `#`, espacios colapsados y recorte a 120 caracteres. `friction` es nombre del evento más pathname más tag. `validation` es nombre del evento más pathname. `drop-off` es id del embudo más el índice del paso de origen. El texto interior del elemento no entra en la firma.
 - Comentarios de actualización: `<!-- logs-watcher-update: {id} -->`, con `{id}` igual al id de evento o al fin de ventana. Si el marcador ya existe, no se comenta otra vez.
 
 ### Flujo del agente de fix
 
-Solo para `blocker`, `truncated` y `flow-blocked`. Rama: `logs-watcher/fix-{sentryIssueId}-{8 primeros hex de generationKey}`. `generationKey` del fix: SHA-256 de `fix\n{sentryIssueId}\n{latestEventId}\n{baseSha}`.
+Solo para `blocker`, `truncated` y `flow-blocked`. Rama: `logs-watcher/fix-{targetId}-{sentryIssueId}-{8 primeros hex de generationKey}`. `generationKey` del fix: SHA-256 de `fix\n{targetId}\n{sentryIssueId}\n{latestEventId}\n{baseSha}`.
 
 Pasos:
 
@@ -301,7 +334,7 @@ Pasos:
 3. Validar. Si falla, una segunda llamada con los códigos de error. Si vuelve a fallar, no hay PR: comentario en el issue con el código `fix_invalid`. El progreso se queda en `detectado`.
 4. `git apply --check`. Si no aplica, no hay PR y el comentario lleva `fix_does_not_apply`.
 5. Commit en la rama nueva. Mensaje: `fix: {summary}` con colas `Sentry-Issue: {id}` y `GitHub-Issue: {n}`. El `summary` validado tiene como máximo 400 caracteres.
-6. Correr la deriva de docs sobre ese diff, antes de abrir el PR. `generationKey` de esa corrida: SHA-256 de `docs\nfix\n{sentryIssueId}\n{headSha}\n{paths ordenados separados por coma}`. Si hay parches válidos, van en un segundo commit de la misma rama. Si la deriva no produce parche, el fix sigue. La propuesta de docs queda `pending` solo cuando hubo candidatos y la validación falló.
+6. Correr la deriva de docs sobre ese diff, antes de abrir el PR. `generationKey` de esa corrida: SHA-256 de `docs\nfix\n{targetId}\n{sentryIssueId}\n{headSha}\n{paths ordenados separados por coma}`. Si hay parches válidos, van en un segundo commit de la misma rama. Si la deriva no produce parche, el fix sigue. La propuesta de docs queda `pending` solo cuando hubo candidatos y la validación falló.
 7. Abrir el PR contra `default_branch`, ya con los commits de fix y de docs. Cuerpo con el marcador de propuesta. Escribir en el issue el progreso `propuesta-abierta` y la URL del PR.
 
 Esquema que debe cumplir el modelo:
@@ -394,7 +427,7 @@ Se corre dentro del job de fix, antes de abrir el PR, y también en `pull_reques
 5. En las líneas añadidas, tokens de `(?:export )?(?:function|class|const|type|interface) ([A-Za-z_][A-Za-z0-9_]{2,})`. Búsqueda literal en docs. Primero los aciertos del mapa, luego los símbolos, luego el nombre. Tope 15 archivos.
 6. Si hay más de 200 `.md` o `.mdx` bajo `docs/` y la lista queda vacía, métrica `docs_prefilter_empty_large_corpus` y fin. Sin embeddings.
 7. Si la lista queda vacía, fin, sin llamada al modelo.
-8. Una llamada. Parches solo bajo `docs/`. Mismas reglas de `before` único y de citas. `generationKey` de un PR ya abierto: SHA-256 de `docs\n{prNumber}\n{headSha}\n{paths ordenados separados por coma}`.
+8. Una llamada. Parches solo bajo `docs/`. Mismas reglas de `before` único y de citas. `generationKey` de un PR ya abierto: SHA-256 de `docs\n{targetId}\n{prNumber}\n{headSha}\n{paths ordenados separados por coma}`. La rama de un PR de docs que no es el fix es `logs-watcher/docs-{targetId}-{prNumber}-{8 hex}`.
 
 Formato opcional de `docs/map.yml` en el repositorio vigilado:
 
@@ -429,7 +462,7 @@ Dónde se escribe (ADR-0012):
 
 ### Vía PostHog
 
-Reloj cada 6 horas en punto UTC, y una vez a los 2 minutos de arrancar el proceso. Clave del job: `posthog:{fin de ventana en hora UTC}`. Ventana: últimas 24 horas. Sin modelo (ADR-0013).
+Reloj cada 6 horas en punto UTC, y una vez a los 2 minutos de arrancar el proceso. Un job por target activo con PostHog configurado. Clave del job: `posthog:{targetId}:{fin de ventana en hora UTC}`. Ventana: últimas 24 horas. Sin modelo (ADR-0013).
 
 Consultas a `POST {host}/api/projects/{projectId}/query/` con la clave personal de solo lectura.
 
@@ -591,31 +624,25 @@ Tasa de salida: GitHub 4 solicitudes por segundo, Sentry 2, PostHog 1. Ante 429 
 
 ## Decisiones abiertas
 
-Lo que ya está cerrado vive en `.ai/adr/` y no se repite aquí. El implementador no inventa un valor para las cuatro decisiones de abajo. Mientras falten, el servicio arranca y la vía afectada no llama a ese proveedor.
+OQ-1 está cerrada. El blanco es una colección de targets (ADR-0017 y la sección Targets de Alcance). `owner` y `name` no son una pregunta de producto: son configuración de despliegue del target, sin valor por defecto.
 
-<a id="oq-1"></a>
-
-### OQ-1. Repositorio de la aplicación vigilada
-
-¿Cuál es el `owner` y el `name` de GitHub de la aplicación que hay que vigilar?
-
-Sin eso la App no tiene dónde instalarse y no se abre ningún issue. No hay valor por defecto. La rama base será la `default_branch` de ese repositorio.
+Siguen abiertas tres preguntas, las tres sobre el primer target. El implementador no inventa un valor para ellas. Mientras falten, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
 
 <a id="oq-2"></a>
 
 ### OQ-2. Proyecto de Sentry y entornos de producción
 
-¿Cuál es la organización, el slug del proyecto, la `baseUrl` si no es `https://sentry.io`, y la lista exacta de `environment` que cuentan como producción?
+Para el primer target, ¿cuál es la organización, el slug del proyecto, la `baseUrl` si no es `https://sentry.io`, y la lista exacta de `environment` que cuentan como producción?
 
-Con `productionEnvironments` vacío la vía Sentry descarta todos los eventos a propósito, para no tratar staging como producción. El servicio no elige esos nombres.
+La respuesta rellena `sentry` de esa entrada. No elige el repositorio. Con `productionEnvironments` vacío la vía Sentry de ese target descarta todos los eventos a propósito, para no tratar staging como producción. El servicio no elige esos nombres.
 
 <a id="oq-3"></a>
 
 ### OQ-3. PostHog, validaciones y embudos
 
-¿Cuál es el host (`https://us.posthog.com`, `https://eu.posthog.com` u otro), el id de proyecto, los nombres de evento de `validationEvents`, y los embudos?
+Para el primer target, ¿cuál es el host (`https://us.posthog.com`, `https://eu.posthog.com` u otro), el id de proyecto, los nombres de evento de `validationEvents`, y los embudos?
 
-Hace falta, como mínimo, el embudo de pago y el de cada formulario cuyo abandono interese. Cada embudo lleva un `id` estable y los `event` de sus pasos, en orden. Ejemplo de forma, no de nombres reales:
+La respuesta rellena `posthog` de esa entrada. Hace falta, como mínimo, el embudo de pago y el de cada formulario cuyo abandono interese. Cada embudo lleva un `id` estable y los `event` de sus pasos, en orden. Ejemplo de forma, no de nombres reales:
 
 ```json
 {
@@ -628,12 +655,12 @@ Hace falta, como mínimo, el embudo de pago y el de cada formulario cuyo abandon
 }
 ```
 
-Si `host` o `projectId` faltan, no hay barrido. Si solo faltan `validationEvents` o `funnels`, se omiten esas consultas y no se inventan eventos de pago ni de formularios. Errores `$exception` y clics `$rageclick` y `$dead_click` sí pueden correr en cuanto host y proyecto existan.
+Si en ese target faltan `host` o `projectId`, no hay barrido suyo. Si solo faltan `validationEvents` o `funnels`, se omiten esas consultas y no se inventan eventos de pago ni de formularios. Errores `$exception` y clics `$rageclick` y `$dead_click` sí pueden correr en ese target en cuanto host y proyecto existan y el target esté activo.
 
 <a id="oq-4"></a>
 
 ### OQ-4. Proveedor LLM y salida de código depurado
 
-¿A qué endpoint compatible con `/chat/completions` se puede llamar, con qué modelo, y se acepta enviar fuera del VPS stacks, diffs y fragmentos de `docs/` ya pasados por el depurador?
+Para el primer target, ¿a qué endpoint compatible con `/chat/completions` se puede llamar, con qué modelo, y se acepta enviar fuera del VPS stacks, diffs y fragmentos de `docs/` de ese target ya pasados por el depurador?
 
-Sin `LLM_BASE_URL`, `LLM_API_KEY` y `LLM_MODEL` no hay llamadas. La clasificación determinista y los issues de plantilla siguen. No hay PR de fix ni parche de docs, porque ambos necesitan el modelo. El servicio no elige proveedor ni asume una residencia de datos.
+La respuesta da valor a las variables que nombra el bloque `llm` de esa entrada. Sin esas variables no hay llamadas para ese target. La clasificación determinista y los issues de plantilla siguen. No hay PR de fix ni parche de docs de ese target, porque ambos necesitan el modelo. El servicio no elige proveedor ni asume una residencia de datos. Otro target puede nombrar otras variables sin cambiar el esquema.
