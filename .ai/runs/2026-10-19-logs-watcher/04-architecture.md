@@ -305,7 +305,7 @@ El comando `/logs-watcher` solo se acepta desde `issue_comment` con firma de Git
   3. Unidad systemd `logs-watcher.service`, `Restart=on-failure`, variables de entorno desde un archivo de modo `600`.
   4. Terminación TLS. Al proxy solo llegan `/webhooks/sentry/`, `/webhooks/github` y `/healthz`.
   5. Crear la GitHub App con los permisos de arriba. Instalarla cuando un target tenga `owner` y `name`. Hasta entonces no hay repositorio de destino y no se abre ningún issue. El webhook de Sentry de cada target usa el secreto nombrado en su configuración.
-  6. Rellenar el primer target con OQ-3 y OQ-4 cuando Artur las responda. `owner`, `name`, la organización de Sentry, el slug y `productionEnvironments` se rellenan en el despliegue, sin valor por defecto. `baseUrl` vacía vale `https://sentry.io`. Cada dato que falte deja esa vía de ese target en `config_missing`, `production_environments_empty` o el target inactivo, sin abrir un issue de Sentry y sin llamadas a ese proveedor.
+  6. Rellenar el primer target con OQ-4 cuando Artur la responda. `owner`, `name`, la organización de Sentry, el slug, `productionEnvironments` y el `projectId` de PostHog se rellenan en el despliegue, sin valor por defecto. `baseUrl` vacía vale `https://sentry.io`. El host de PostHog es `https://us.posthog.com`. Sin `projectId` no hay barrido de PostHog. `validationEvents` y `funnels` vacíos no consultan esos eventos. Cada dato que falte deja esa vía de ese target en `config_missing`, `production_environments_empty` o el target inactivo, sin abrir un issue de esa vía.
   7. Arrancar con `LOGS_WATCHER_DRY_RUN=true`. Revisar al menos diez filas de clasificación o propuestas guardadas, sin escritura en GitHub.
   8. Pasar `LOGS_WATCHER_DRY_RUN=false` es un cambio de configuración consciente, no el valor inicial.
 - Monitoreo y alertas: las métricas y los códigos de alerta están en la especificación, sección Observabilidad. `msg` de log es un código estable. Los que esta operación exige son `webhook_rejected`, `event_dropped`, `job_dead`, `budget_deferred`, `proposal_stale`, `config_missing`, `docs_prefilter_empty_large_corpus`, `docs_diff_too_large`, `docs_map_invalid`.
@@ -331,7 +331,7 @@ Runbook corto:
 
 ## Riesgos y decisiones abiertas
 
-No hay decisiones abiertas en este documento. OQ-1 está cerrada en ADR-0017. OQ-2 está cerrada en ADR-0018. Las dos que Artur tiene que cerrar están en `03-specification.md`, sección Decisiones abiertas (`#oq-3`, `#oq-4`), y se responden para el primer target.
+No hay decisiones abiertas en este documento. OQ-1 está cerrada en ADR-0017. OQ-2 está cerrada en ADR-0018. OQ-3 está cerrada en ADR-0019. La que Artur tiene que cerrar está en `03-specification.md`, sección Decisiones abiertas (`#oq-4`), y se responde para el primer target.
 
 Riesgos que se aceptan en la fase 1:
 

@@ -65,7 +65,7 @@ Un target ata una aplicación: su repositorio de GitHub, su proyecto de Sentry y
 
 `owner` y `name` son configuración obligatoria de despliegue para que ese target actúe. Hasta que estén configurados, la GitHub App no tiene dónde instalarse y no se abre ningún issue. Una configuración vacía (`targets` vacío, o un target con `owner` o `name` vacíos) es válida. El resto de la especificación no queda bloqueada por no conocer el repositorio hoy.
 
-OQ-3 y OQ-4 siguen abiertas y se responden para ese primer target. OQ-2 está cerrada: la organización, el slug y `productionEnvironments` de Sentry son configuración de despliegue de cada target (ADR-0018).
+OQ-4 sigue abierta y se responde para ese primer target. OQ-2 está cerrada: la organización, el slug y `productionEnvironments` de Sentry son configuración de despliegue de cada target (ADR-0018). OQ-3 está cerrada: el host de PostHog, el `projectId` y las listas de validaciones y embudos son configuración de ese target (ADR-0019).
 
 Un target está activo solo cuando `github.owner` y `github.name`, ya recortados, no están vacíos. Un target inactivo no llama a GitHub, a Sentry ni a PostHog y no abre issues. El webhook de Sentry de ese `id` responde 200, guarda la entrega y la marca `target_inactive`. Un `id` que no está en `targets` responde 404. Un evento de GitHub cuyo repositorio no coincide con ningún target activo responde 200 y no encola.
 
@@ -82,6 +82,18 @@ La misma regla vale para el slug del proyecto y para los nombres exactos de `pro
 `baseUrl` vale `https://sentry.io` si el operador no la escribe o la deja vacía. El operador puede sustituirla.
 
 Si `productionEnvironments` está vacío, la vía Sentry de ese target descarta todos los eventos a propósito, para no tratar staging como producción. El servicio no elige esos nombres. Con `org` vacío, slug vacío o `productionEnvironments` vacío no se abre ningún issue de Sentry. Esos tres campos siguen siendo configuración obligatoria de despliegue del target. Una lista vacía es configuración válida.
+
+### PostHog del target
+
+Decisión cerrada en ADR-0019. OQ-3 ya no es una pregunta de producto.
+
+El host de PostHog es `https://us.posthog.com`. Si `host` viene vacío u omitido, el servicio usa esa URL. No llama a otro host.
+
+`projectId` todavía no se conoce. Lo escribe el operador, más adelante, en el archivo de configuración del target. La especificación no inventa un id. Si `projectId` falta o está vacío, no hay barrido de PostHog.
+
+`validationEvents` y `funnels` no tienen valores activos por defecto. El archivo puede incluir ejemplos comentados (embudo de pago y embudo de formulario) que muestran la forma: un `id` estable y pasos `event` en orden. El servicio ejecuta esas consultas solo cuando las listas están puestas de forma explícita con nombres reales de evento. Las listas vacías omiten esas consultas. No inventa eventos de pago ni de formulario y no abre issues a partir de los valores de ejemplo.
+
+`projectId`, `validationEvents` y `funnels` siguen siendo configuración de despliegue del target.
 
 ### Configuración que el servicio no inventa
 
@@ -110,7 +122,7 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
         ]
       },
       "posthog": {
-        "host": "",
+        "host": "https://us.posthog.com",
         "projectId": "",
         "apiKeyEnv": "POSTHOG_API_KEY",
         "validationEvents": [],
@@ -136,7 +148,18 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
 }
 ```
 
-`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `sentry.baseUrl` vacío u omitido vale `https://sentry.io`. `sentry.org`, `sentry.project` y `sentry.productionEnvironments` no tienen valor por defecto. `funnels[].id` es estable. Cada paso tiene `event`. No hay pasos por defecto. El tope de coste sigue siendo del proceso, compartido por todos los targets.
+`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `sentry.baseUrl` vacío u omitido vale `https://sentry.io`. `sentry.org`, `sentry.project` y `sentry.productionEnvironments` no tienen valor por defecto. `posthog.host` vacío u omitido vale `https://us.posthog.com`. `posthog.projectId` no tiene valor por defecto. `validationEvents` y `funnels` activos son listas vacías. El tope de coste sigue siendo del proceso, compartido por todos los targets.
+
+El archivo admite comentarios `//` y `/* */`. El servicio los quita antes de interpretar el JSON. Un comentario no es configuración. El archivo puede incluir, comentado, este ejemplo de forma. Los `event` en `...` no son nombres reales:
+
+```text
+// "funnels": [
+//   { "id": "payment", "steps": [ { "event": "..." }, { "event": "..." }, { "event": "..." } ] },
+//   { "id": "form", "steps": [ { "event": "..." }, { "event": "..." } ] }
+// ]
+```
+
+`funnels[].id` es estable y cada paso tiene `event` solo cuando el operador deja esa lista fuera del comentario, con nombres reales. Hasta entonces la lista activa es `[]`.
 
 Variables de entorno, también fuera de git:
 
@@ -474,9 +497,9 @@ Dónde se escribe (ADR-0012):
 
 ### Vía PostHog
 
-Reloj cada 6 horas en punto UTC, y una vez a los 2 minutos de arrancar el proceso. Un job por target activo con PostHog configurado. Clave del job: `posthog:{targetId}:{fin de ventana en hora UTC}`. Ventana: últimas 24 horas. Sin modelo (ADR-0013).
+Reloj cada 6 horas en punto UTC, y una vez a los 2 minutos de arrancar el proceso. Un job por target activo cuyo `projectId` no está vacío. Si falta, no hay barrido. Clave del job: `posthog:{targetId}:{fin de ventana en hora UTC}`. Ventana: últimas 24 horas. Sin modelo (ADR-0013).
 
-Consultas a `POST {host}/api/projects/{projectId}/query/` con la clave personal de solo lectura.
+Consultas a `POST https://us.posthog.com/api/projects/{projectId}/query/` con la clave personal de solo lectura.
 
 Errores mostrados. Abre hallazgo si `events` es mayor o igual que 5.
 
@@ -509,9 +532,9 @@ HAVING users >= 5 AND events >= 10
 LIMIT 50
 ```
 
-Validaciones: solo si `validationEvents` no está vacío. Un grupo por nombre de evento y pathname, umbral `events` mayor o igual que 10. Si la lista está vacía, esta consulta no se hace.
+Validaciones: solo si `validationEvents` está puesto como JSON y no está vacío. Un grupo por nombre de evento y pathname, umbral `events` mayor o igual que 10. Si la lista está vacía, o el ejemplo sigue comentado, esta consulta no se hace.
 
-Abandono: solo si `funnels` no está vacío. Por cada par de pasos consecutivos, con `FunnelsQuery` y `dateRange.date_from` igual a `-1d`. Se abre hallazgo si el paso de origen tiene al menos 10 usuarios, el cociente destino/origen es menor que 0.5, y la diferencia absoluta es al menos 10. Un issue por par de pasos. Si el embudo no está configurado, no se inventa el pago ni el formulario.
+Abandono: solo si `funnels` está puesto como JSON y no está vacío. Por cada par de pasos consecutivos, con `FunnelsQuery` y `dateRange.date_from` igual a `-1d`. Se abre hallazgo si el paso de origen tiene al menos 10 usuarios, el cociente destino/origen es menor que 0.5, y la diferencia absoluta es al menos 10. Un issue por par de pasos. El ejemplo comentado de pago o de formulario no se consulta y no abre issues.
 
 El pathname que se publica lleva la query quitada. La query no se guarda.
 
@@ -588,7 +611,7 @@ El bloque de conteos se reemplaza en cada barrido si los marcadores aparecen una
 | Un PR de código que cambia `src/billing/pay.ts` y un mapa que apunta a `docs/billing.md` produce un parche solo bajo `docs/`. | Fixture de diff más `docs/map.yml`. |
 | Un PR desde un fork no recibe push. | Head repo distinto del base. |
 | La consulta de PostHog no selecciona `distinct_id` ni correo, y el issue no contiene `@` ni la query de la URL. | Aserción sobre el SQL construido y sobre el cuerpo. |
-| Con `funnels` vacío no se menciona un pago inventado. | Barrido con configuración vacía. |
+| Con `funnels` y `validationEvents` vacíos, y con el ejemplo de pago y formulario solo en comentarios, no se consultan esos eventos ni se abre un issue. | Barrido con la configuración de ejemplo. |
 | Al superar 5.00 USD en el día UTC, el job de modelo queda `deferred_budget` y el issue determinista de un `blocker` sí se crea. | Libro de coste precargado. |
 | `LOGS_WATCHER_DRY_RUN=true` no llama a `POST /repos/.../issues` ni a pulls. | Registro de clientes. |
 
@@ -640,28 +663,9 @@ OQ-1 está cerrada. El blanco es una colección de targets (ADR-0017 y la secci�
 
 OQ-2 está cerrada. Organización, slug y `productionEnvironments` de Sentry no son una pregunta de producto: son configuración de despliegue de cada target (ADR-0018 y la sección Sentry del target). `baseUrl` vale `https://sentry.io` salvo que el operador ponga otra. Con org vacío, slug vacío o `productionEnvironments` vacío no se abre ningún issue de Sentry.
 
-Siguen abiertas dos preguntas, las dos sobre el primer target. El implementador no inventa un valor para ellas. Mientras falten, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
+OQ-3 está cerrada. El host de PostHog es `https://us.posthog.com`. `projectId`, `validationEvents` y `funnels` no son una pregunta de producto: son configuración de despliegue de cada target (ADR-0019 y la sección PostHog del target). Sin `projectId` no hay barrido. Las listas vacías y los ejemplos comentados no abren issues.
 
-<a id="oq-3"></a>
-
-### OQ-3. PostHog, validaciones y embudos
-
-Para el primer target, ¿cuál es el host (`https://us.posthog.com`, `https://eu.posthog.com` u otro), el id de proyecto, los nombres de evento de `validationEvents`, y los embudos?
-
-La respuesta rellena `posthog` de esa entrada. Hace falta, como mínimo, el embudo de pago y el de cada formulario cuyo abandono interese. Cada embudo lleva un `id` estable y los `event` de sus pasos, en orden. Ejemplo de forma, no de nombres reales:
-
-```json
-{
-  "id": "payment",
-  "steps": [
-    { "event": "..." },
-    { "event": "..." },
-    { "event": "..." }
-  ]
-}
-```
-
-Si en ese target faltan `host` o `projectId`, no hay barrido suyo. Si solo faltan `validationEvents` o `funnels`, se omiten esas consultas y no se inventan eventos de pago ni de formularios. Errores `$exception` y clics `$rageclick` y `$dead_click` sí pueden correr en ese target en cuanto host y proyecto existan y el target esté activo.
+Sigue abierta una pregunta, sobre el primer target. El implementador no inventa un valor para ella. Mientras falte, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
 
 <a id="oq-4"></a>
 

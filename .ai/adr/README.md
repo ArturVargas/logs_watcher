@@ -22,3 +22,4 @@ Cada ADR conserva una decisión difícil de revertir, las alternativas y la cond
 | [ADR-0016](ADR-0016-coste-y-reintentos.md) | Tope de coste y reintentos. |
 | [ADR-0017](ADR-0017-targets-como-coleccion.md) | El blanco es una colección de targets. |
 | [ADR-0018](ADR-0018-sentry-en-el-despliegue.md) | Sentry se elige al desplegar el target. |
+| [ADR-0019](ADR-0019-posthog-en-el-despliegue.md) | PostHog se elige al desplegar el target. |

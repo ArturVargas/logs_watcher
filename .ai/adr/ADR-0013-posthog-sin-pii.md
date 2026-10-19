@@ -23,7 +23,7 @@ El texto visible de un elemento (inner text) no entra en la clave de deduplicaci
 ## Consecuencias
 
 - Diseño ve magnitud y lugar, no la sesión. Si más adelante hace falta la replay, será otro ADR y no un enlace pegado en el issue.
-- Con `funnels` o `validationEvents` vacíos esas consultas no se inventan: se omiten.
+- Qué listas de validación y de embudo se ejecutan lo decide ADR-0019. Este ADR no elige el host ni el `projectId`.
 - Un error de PostHog no crea un issue con el cuerpo crudo de la respuesta.
 
 ## Reabrir si

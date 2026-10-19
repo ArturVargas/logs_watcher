@@ -12,7 +12,7 @@ No hay despliegue. El diseño que deberá implementarse después de la revisión
 
 ## Dependencias e integraciones
 
-Ninguna está conectada. El servicio, cuando exista, hablará con la API y los webhooks de Sentry, la API de consultas de PostHog, una GitHub App, y un endpoint de chat compatible con OpenAI. El `owner`, el `name`, la organización de Sentry, el slug y `productionEnvironments` del primer target son configuración de despliegue, sin valor por defecto (ADR-0017, ADR-0018). `baseUrl` vale `https://sentry.io` si no se escribe otra. El proyecto de PostHog y el proveedor LLM de ese primer target siguen en las decisiones abiertas de `03-specification.md`.
+Ninguna está conectada. El servicio, cuando exista, hablará con la API y los webhooks de Sentry, la API de consultas de PostHog, una GitHub App, y un endpoint de chat compatible con OpenAI. El `owner`, el `name`, la organización de Sentry, el slug, `productionEnvironments` y el `projectId` de PostHog del primer target son configuración de despliegue, sin valor por defecto (ADR-0017, ADR-0018, ADR-0019). `baseUrl` vale `https://sentry.io` si no se escribe otra. El host de PostHog es `https://us.posthog.com`. El proveedor LLM de ese primer target sigue en las decisiones abiertas de `03-specification.md`.
 
 ## Riesgos y deuda conocida
 
