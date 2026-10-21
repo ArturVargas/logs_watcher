@@ -14,7 +14,7 @@ Un target ata una aplicación: su repositorio de GitHub (`owner`, `name`), su pr
 
 `owner` y `name` son configuración obligatoria de despliegue para que ese target actúe. Hasta que ambos estén puestos, la GitHub App no tiene dónde instalarse y no se abre ningún issue. `targets` vacío, o un target con `owner` o `name` vacíos, es configuración válida. El resto de la especificación no espera a conocer el repositorio.
 
-OQ-4 sigue abierta y se contesta para el primer target. OQ-2 está cerrada: la organización, el slug y los entornos de producción de Sentry son configuración de despliegue de cada target, no un nombre fijado aquí (ADR-0018). OQ-3 está cerrada: el host de PostHog, el `projectId` y las listas de validaciones y embudos son configuración de cada target (ADR-0019).
+OQ-4 está cerrada: los parches los escribe Qwen Cloud (ADR-0025). OQ-2 está cerrada: la organización, el slug y los entornos de producción de Sentry son configuración de despliegue de cada target, no un nombre fijado aquí (ADR-0018). OQ-3 está cerrada: el host de PostHog, el `projectId` y las listas de validaciones y embudos son configuración de cada target (ADR-0019).
 
 ## Alternativas consideradas
 

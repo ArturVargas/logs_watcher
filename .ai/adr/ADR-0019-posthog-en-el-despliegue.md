@@ -14,7 +14,7 @@ El host de PostHog es `https://us.posthog.com`. Si `host` viene vacío u omitido
 
 `projectId`, `validationEvents` y `funnels` siguen siendo configuración de despliegue del target. OQ-3 ya no es una pregunta de producto.
 
-OQ-4 sigue abierta.
+OQ-4 está cerrada en ADR-0025. Este ADR no elige el modelo de los parches.
 
 ## Alternativas consideradas
 

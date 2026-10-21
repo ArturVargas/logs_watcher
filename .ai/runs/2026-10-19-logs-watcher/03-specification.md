@@ -67,7 +67,7 @@ Un target ata una aplicación: su repositorio de GitHub, su proyecto de Sentry y
 
 `owner` y `name` son configuración obligatoria de despliegue para que ese target actúe. Hasta que estén configurados, la GitHub App no tiene dónde instalarse y no se abre ningún issue. Una configuración vacía (`targets` vacío, o un target con `owner` o `name` vacíos) es válida. El resto de la especificación no queda bloqueada por no conocer el repositorio hoy.
 
-OQ-4 sigue abierta y se responde para ese primer target. OQ-2 está cerrada: la organización, el slug y `productionEnvironments` de Sentry son configuración de despliegue de cada target (ADR-0018). OQ-3 está cerrada: el host de PostHog, el `projectId` y las listas de validaciones y embudos son configuración de ese target (ADR-0019).
+OQ-4 está cerrada: los parches los escribe Qwen Cloud (ADR-0025). OQ-2 está cerrada: la organización, el slug y `productionEnvironments` de Sentry son configuración de despliegue de cada target (ADR-0018). OQ-3 está cerrada: el host de PostHog, el `projectId` y las listas de validaciones y embudos son configuración de ese target (ADR-0019).
 
 Un target está activo solo cuando `github.owner` y `github.name`, ya recortados, no están vacíos. Un target inactivo no llama a GitHub, a Sentry ni a PostHog y no abre issues. El webhook de Sentry de ese `id` responde 200, guarda la entrega y la marca `target_inactive`. Un `id` que no está en `targets` responde 404. Un evento de GitHub cuyo repositorio no coincide con ningún target activo responde 200 y no encola.
 
@@ -96,6 +96,14 @@ El host de PostHog es `https://us.posthog.com`. Si `host` viene vacío u omitido
 `validationEvents` y `funnels` no tienen valores activos por defecto. El archivo puede incluir ejemplos comentados (embudo de pago y embudo de formulario) que muestran la forma: un `id` estable y pasos `event` en orden. El servicio ejecuta esas consultas solo cuando las listas están puestas de forma explícita con nombres reales de evento. Las listas vacías omiten esas consultas. No inventa eventos de pago ni de formulario y no abre issues a partir de los valores de ejemplo.
 
 `projectId`, `validationEvents` y `funnels` siguen siendo configuración de despliegue del target.
+
+### Parches con Qwen Cloud
+
+Decisión cerrada en ADR-0025. OQ-4 ya no es una pregunta de producto.
+
+Los parches de arreglo y de documentación los escribe un modelo de Qwen Cloud. Sirven varios modelos. El id está en la configuración y no hay un modelo único grabado en el servicio. El operador abre su propia cuenta de Qwen Cloud y pone la clave. El servicio no lleva una clave compartida. Artur acepta que el código y los logs ya depurados salgan del VPS hacia esa API. El depurador quita tokens, correos y datos de usuario antes de la llamada. Un payload sin depurar no sale. La base por defecto es `https://maas.qwencloudapi.com/compatible-mode/v1` y la autenticación es `Authorization: Bearer`, como documentan la primera llamada y el chat compatible con OpenAI de Qwen Cloud. JEv no escribe estos parches.
+
+Riesgo a revisar, no una conclusión legal: las condiciones de retención y de uso de datos de la API de Qwen Cloud. Las páginas públicas no se tomaron como una sola regla verificada. Quedan sin comprobar como conclusión.
 
 ### Configuración que el servicio no inventa
 
@@ -166,7 +174,7 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
 }
 ```
 
-`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `sentry.baseUrl` vacío u omitido vale `https://sentry.io`. `sentry.org`, `sentry.project` y `sentry.productionEnvironments` no tienen valor por defecto. `posthog.host` vacío u omitido vale `https://us.posthog.com`. `posthog.projectId` no tiene valor por defecto. `validationEvents` y `funnels` activos son listas vacías. El tope de coste sigue siendo del proceso, compartido por todos los targets.
+`targets: []` es válido y equivale a no vigilar nada. `testCommand` es `null` o una lista de argv, por ejemplo `["npm", "test"]`. No es una cadena de shell. `github.installationId` vacío usa `GITHUB_INSTALLATION_ID`. `sentry.baseUrl` vacío u omitido vale `https://sentry.io`. `sentry.org`, `sentry.project` y `sentry.productionEnvironments` no tienen valor por defecto. `posthog.host` vacío u omitido vale `https://us.posthog.com`. `posthog.projectId` no tiene valor por defecto. `llm` sin `LLM_BASE_URL` usa `https://maas.qwencloudapi.com/compatible-mode/v1`. `LLM_MODEL` no tiene valor por defecto: si está vacío, no hay llamada de parche. `validationEvents` y `funnels` activos son listas vacías. El tope de coste sigue siendo del proceso, compartido por todos los targets.
 
 El archivo admite comentarios `//` y `/* */`. El servicio los quita antes de interpretar el JSON. Un comentario no es configuración. El archivo puede incluir, comentado, este ejemplo de forma. Los `event` en `...` no son nombres reales:
 
@@ -189,7 +197,9 @@ Variables de entorno, también fuera de git:
 | `SENTRY_WEBHOOK_SECRET`, `SENTRY_AUTH_TOKEN` | La vía Sentry del target que las referencia no procesa. |
 | `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_INSTALLATION_ID` | No hay escritura ni lectura de GitHub. La clave por defecto es `/etc/logs-watcher/github-app.pem`. `GITHUB_INSTALLATION_ID` solo se usa si el target deja `installationId` vacío. |
 | `POSTHOG_API_KEY` | No hay barrido de PostHog del target que la referencia. |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No hay llamadas al modelo del target que las referencia. La plantilla determinista sigue en pie. No afecta al clasificador de importancia. |
+| `LLM_BASE_URL` | Se usa `https://maas.qwencloudapi.com/compatible-mode/v1`. |
+| `LLM_API_KEY` | No hay llamada de parche. La clave es la del operador. No hay una clave compartida en el servicio. |
+| `LLM_MODEL` | No hay llamada de parche ni de docs. No afecta al clasificador de importancia. |
 | `TYPESAFE_API_KEY` | `ImportanceClassifier` responde vacío. La urgencia no es `low`. |
 | `RAILWAY_LOG_WEBHOOK_SECRET`, `VERCEL_LOG_WEBHOOK_SECRET`, `CLOUDFLARE_LOG_WEBHOOK_SECRET` | Ese drenaje no se ingiere. |
 | `ALERT_WEBHOOK_URL` | Las alertas quedan solo en el log y en la tabla `alerts`. |
@@ -388,7 +398,7 @@ Si coincide, no se abre otro issue. Se añade la fuente al bloque `logs-watcher-
 
 ### Importancia y urgencia
 
-Después de tener el texto depurado del fallo, el puerto `ImportanceClassifier` devuelve `importance` y `urgency`, cada una `low`, `medium` o `high` (ADR-0021). No es el modelo de OQ-4. El adaptador inicial es `typesafe-system-one` y el `modelId` inicial es `jev-latest`, el alias que TypeSafe documenta para JEv. Llama a `POST https://api.typesafe.ai/v1/systemone`. No se inventa otro endpoint, otro cuerpo ni un precio. Las dos preguntas son `choice` con etiquetas `low`, `medium` y `high`. El fallo va en `state`. Si falta `TYPESAFE_API_KEY` o la llamada falla, las dos salen vacías y la urgencia no es `low`. El issue guarda las dos y el `modelId` versionado que devuelve la respuesta.
+Después de tener el texto depurado del fallo, el puerto `ImportanceClassifier` devuelve `importance` y `urgency`, cada una `low`, `medium` o `high` (ADR-0021). No es el modelo que escribe parches (ADR-0025). El adaptador inicial es `typesafe-system-one` y el `modelId` inicial es `jev-latest`, el alias que TypeSafe documenta para JEv. Llama a `POST https://api.typesafe.ai/v1/systemone`. No se inventa otro endpoint, otro cuerpo ni un precio. Las dos preguntas son `choice` con etiquetas `low`, `medium` y `high`. El fallo va en `state`. Si falta `TYPESAFE_API_KEY` o la llamada falla, las dos salen vacías y la urgencia no es `low`. El issue guarda las dos y el `modelId` versionado que devuelve la respuesta.
 
 ### Idioma del issue
 
@@ -701,18 +711,12 @@ Tasa de salida: GitHub 4 solicitudes por segundo, Sentry 2, PostHog 1. Ante 429 
 
 ## Decisiones abiertas
 
-OQ-1 está cerrada. El blanco es una colección de targets (ADR-0017 y la sección Targets de Alcance). `owner` y `name` no son una pregunta de producto: son configuración de despliegue del target, sin valor por defecto.
+No queda ninguna pregunta de producto abierta.
 
-OQ-2 está cerrada. Organización, slug y `productionEnvironments` de Sentry no son una pregunta de producto: son configuración de despliegue de cada target (ADR-0018 y la sección Sentry del target). `baseUrl` vale `https://sentry.io` salvo que el operador ponga otra. Con org vacío, slug vacío o `productionEnvironments` vacío no se abre ningún issue de Sentry.
+OQ-1 está cerrada. El blanco es una colección de targets (ADR-0017 y la sección Targets). `owner` y `name` son configuración de despliegue, sin valor por defecto.
 
-OQ-3 está cerrada. El host de PostHog es `https://us.posthog.com`. `projectId`, `validationEvents` y `funnels` no son una pregunta de producto: son configuración de despliegue de cada target (ADR-0019 y la sección PostHog del target). Sin `projectId` no hay barrido. Las listas vacías y los ejemplos comentados no abren issues.
+OQ-2 está cerrada. Organización, slug y `productionEnvironments` de Sentry son configuración de despliegue (ADR-0018). `baseUrl` vale `https://sentry.io` salvo que el operador ponga otra.
 
-Sigue abierta una pregunta, sobre el primer target. El implementador no inventa un valor para ella. Mientras falte, el servicio arranca y la vía afectada de ese target no llama a ese proveedor.
+OQ-3 está cerrada. El host de PostHog es `https://us.posthog.com`. `projectId`, `validationEvents` y `funnels` son configuración de despliegue (ADR-0019).
 
-<a id="oq-4"></a>
-
-### OQ-4. Proveedor LLM y salida de código depurado
-
-Para el primer target, ¿a qué endpoint compatible con `/chat/completions` se puede llamar, con qué modelo, y se acepta enviar fuera del VPS stacks, diffs y fragmentos de `docs/` de ese target ya pasados por el depurador? Esta pregunta no elige el clasificador de importancia ni de urgencia. Ese puerto ya está decidido en ADR-0021, con JEv como primer modelo.
-
-La respuesta da valor a las variables que nombra el bloque `llm` de esa entrada. Sin esas variables no hay llamadas para ese target. La clasificación determinista y los issues de plantilla siguen. No hay PR de fix ni parche de docs de ese target, porque ambos necesitan el modelo. El servicio no elige proveedor ni asume una residencia de datos. Otro target puede nombrar otras variables sin cambiar el esquema.
+OQ-4 está cerrada. Los parches los escribe Qwen Cloud (ADR-0025 y la sección Parches con Qwen Cloud). El id de modelo y la clave los pone el operador. JEv no escribe parches.

@@ -4,7 +4,7 @@
 
 Un proceso Node.js 22 en un VPS, con Postgres 16 en el mismo host, recibe webhooks y ejecuta una cola. El comportamiento normativo (rúbrica, plantillas, filtros, umbrales y comandos) está en `03-specification.md`. Este documento fija componentes, datos, puertos, cerco del modelo y operación.
 
-Las decisiones difíciles de revertir están aceptadas en `.ai/adr/`, del ADR-0001 al ADR-0024. ADR-0003 está reemplazada en la prohibición absoluta de fusionar: la regla vigente es ADR-0022. OQ-4 sigue abierta y no está en este archivo.
+Las decisiones difíciles de revertir están aceptadas en `.ai/adr/`, del ADR-0001 al ADR-0025. ADR-0003 está reemplazada en la prohibición absoluta de fusionar: la regla vigente es ADR-0022. No queda una pregunta de producto abierta. Los parches los escribe Qwen Cloud (ADR-0025). JEv no los escribe (ADR-0021).
 
 ```mermaid
 flowchart TD
@@ -81,7 +81,7 @@ stateDiagram-v2
 
 Llamada al modelo, común a clasificación, fix y docs:
 
-- `POST {LLM_BASE_URL}/chat/completions`
+- `POST {base}/chat/completions`, con `base` en `https://maas.qwencloudapi.com/compatible-mode/v1` si `LLM_BASE_URL` está vacía, y `Authorization: Bearer` con la clave del operador (ADR-0025)
 - `temperature` 0
 - `max_tokens` 4096
 - primer intento con `response_format.type` igual a `json_object`
@@ -295,9 +295,9 @@ Firmas:
 
 Comparación en tiempo constante. El JSON se parsea después de verificar. Cuerpo mayor de 1 000 000 bytes: 413, sin fila.
 
-GitHub App en el bucle de fix: Contents y Pull requests en lectura y escritura, Issues en lectura y escritura, Metadata en lectura. Sin Workflows, Administration ni Secrets. El permiso de Workflows solo se pide con `phases.cicd` en `true`, y solo lo usa `cicd_improve` (ADR-0024). Token de instalación de corta duración. La clave privada está en `GITHUB_APP_PRIVATE_KEY_PATH`, modo `600`. `TYPESAFE_API_KEY` es distinta de las variables de OQ-4.
+GitHub App en el bucle de fix: Contents y Pull requests en lectura y escritura, Issues en lectura y escritura, Metadata en lectura. Sin Workflows, Administration ni Secrets. El permiso de Workflows solo se pide con `phases.cicd` en `true`, y solo lo usa `cicd_improve` (ADR-0024). Token de instalación de corta duración. La clave privada está en `GITHUB_APP_PRIVATE_KEY_PATH`, modo `600`. `TYPESAFE_API_KEY` es distinta de la clave de Qwen Cloud. La clave de Qwen la pone el operador. No hay una clave compartida en el servicio.
 
-Sentry: token de lectura del proyecto. PostHog: clave personal de lectura. El modelo: clave distinta, solo si OQ-4 está respondida.
+Sentry: token de lectura del proyecto. PostHog: clave personal de lectura. Qwen Cloud: clave del operador, solo para parches ya depurados. JEv: otra clave, solo para importancia y urgencia. Un payload sin depurar no sale del VPS.
 
 Postgres escucha en `127.0.0.1`. `DATABASE_URL` y el resto de secretos están fuera del repositorio, modo `600`.
 
@@ -327,7 +327,7 @@ El comando `/logs-watcher` solo se acepta desde `issue_comment` con firma de Git
   3. Unidad systemd `logs-watcher.service`, `Restart=on-failure`, variables de entorno desde un archivo de modo `600`.
   4. Terminación TLS. Al proxy solo llegan `/webhooks/sentry/`, `/webhooks/github`, `/webhooks/logs/` y `/healthz`.
   5. Crear la GitHub App con los permisos de arriba. Instalarla cuando un target tenga `owner` y `name`. Hasta entonces no hay repositorio de destino y no se abre ningún issue. El webhook de Sentry de cada target usa el secreto nombrado en su configuración.
-  6. Rellenar el primer target con OQ-4 cuando Artur la responda. `owner`, `name`, la organización de Sentry, el slug, `productionEnvironments` y el `projectId` de PostHog se rellenan en el despliegue, sin valor por defecto. `baseUrl` vacía vale `https://sentry.io`. El host de PostHog es `https://us.posthog.com`. Sin `projectId` no hay barrido de PostHog. `validationEvents` y `funnels` vacíos no consultan esos eventos. Cada dato que falte deja esa vía de ese target en `config_missing`, `production_environments_empty` o el target inactivo, sin abrir un issue de esa vía.
+  6. `owner`, `name`, la organización de Sentry, el slug, `productionEnvironments`, el `projectId` de PostHog y el id de modelo de Qwen se rellenan en el despliegue, sin valor por defecto. `baseUrl` vacía vale `https://sentry.io`. El host de PostHog es `https://us.posthog.com`. La base de Qwen vacía vale `https://maas.qwencloudapi.com/compatible-mode/v1`. Sin `projectId` no hay barrido de PostHog. Sin id de modelo o sin clave de Qwen no hay parche. `validationEvents` y `funnels` vacíos no consultan esos eventos. Cada dato que falte deja esa vía de ese target en `config_missing`, `production_environments_empty` o el target inactivo, sin abrir un issue de esa vía.
   7. Arrancar con `LOGS_WATCHER_DRY_RUN=true`. Revisar al menos diez filas de clasificación o propuestas guardadas, sin escritura en GitHub.
   8. Pasar `LOGS_WATCHER_DRY_RUN=false` es un cambio de configuración consciente, no el valor inicial.
 - Monitoreo y alertas: las métricas y los códigos de alerta están en la especificación, sección Observabilidad. `msg` de log es un código estable. Los que esta operación exige son `webhook_rejected`, `event_dropped`, `job_dead`, `budget_deferred`, `proposal_stale`, `config_missing`, `docs_prefilter_empty_large_corpus`, `docs_diff_too_large`, `docs_map_invalid`.
@@ -353,10 +353,11 @@ Runbook corto:
 
 ## Riesgos y decisiones abiertas
 
-No hay decisiones abiertas en este documento. OQ-1 está cerrada en ADR-0017. OQ-2 está cerrada en ADR-0018. OQ-3 está cerrada en ADR-0019. La que Artur tiene que cerrar está en `03-specification.md`, sección Decisiones abiertas (`#oq-4`), y se responde para el primer target.
+No hay decisiones abiertas en este documento. OQ-1, OQ-2, OQ-3 y OQ-4 están cerradas. No queda una pregunta de producto abierta. El riesgo de las condiciones de retención y de uso de datos de Qwen Cloud sigue sin verificar como conclusión (ADR-0025).
 
 Riesgos que se aceptan en la fase 1:
 
+- Las condiciones de retención y de uso de datos de la API de Qwen Cloud no están verificadas como conclusión (ADR-0025).
 - Un solo nodo. Un VPS apagado para la ingesta hasta que vuelva.
 - El USD del tope es un estimado con precios por defecto. Puede no coincidir con la factura.
 - `userCount` de Sentry es el total del grupo, no la ventana de 24 horas. La prioridad puede subir por historia vieja.

@@ -6,7 +6,9 @@
 
 ## Decisión
 
-Cada job que usa el modelo hace una sola llamada `POST {LLM_BASE_URL}/chat/completions`, `temperature` 0, `response_format.type = json_object`. Si el servidor rechaza `response_format`, hay un reintento sin ese campo. El validador del servicio es el que acepta o rechaza el JSON.
+El proveedor y la salida del código depurado ya no están abiertos: los fija ADR-0025. Qwen Cloud escribe el parche. JEv no lo escribe.
+
+Cada job que usa este modelo hace una sola llamada `POST {base}/chat/completions`, `temperature` 0, `response_format.type = json_object`. `base` es la de ADR-0025. Si el servidor rechaza `response_format`, hay un reintento sin ese campo. El validador del servicio es el que acepta o rechaza el JSON.
 
 El modelo no devuelve la clase de severidad ni la clave de idempotencia. Esas las calcula el servicio.
 
@@ -22,7 +24,7 @@ Si la validación falla, el job de fix puede repetir la llamada una vez, adjunta
 
 ## Consecuencias
 
-- Sin `LLM_BASE_URL`, `LLM_API_KEY` y `LLM_MODEL` el servicio no llama al modelo. La clasificación determinista sigue funcionando.
+- Sin la clave del operador o sin id de modelo no hay llamada de parche. La base por defecto es la de ADR-0025. La clasificación determinista sigue funcionando. Este modelo no clasifica importancia ni urgencia.
 - Un parche que no pasa `git apply --check` no se publica.
 - El cuerpo de los issues de fallo y de hallazgo lo rellena una plantilla, no el modelo.
 

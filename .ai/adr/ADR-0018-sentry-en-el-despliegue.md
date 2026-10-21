@@ -16,7 +16,7 @@ Si `productionEnvironments` está vacío, la vía Sentry de ese target descarta 
 
 `org`, slug y `productionEnvironments` siguen siendo configuración obligatoria de despliegue del target. Si cualquiera de los tres está vacío, no se abre ningún issue de Sentry y no se llama a la API de issues. Una lista vacía es configuración válida. OQ-2 ya no es una pregunta de producto.
 
-OQ-4 sigue abierta. OQ-3 está cerrada en ADR-0019.
+OQ-3 está cerrada en ADR-0019. OQ-4 está cerrada en ADR-0025.
 
 ## Alternativas consideradas
 
