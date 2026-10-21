@@ -20,4 +20,4 @@ No hay deuda de código. El corpus de `docs/` de la aplicación vigilada todaví
 
 ## Próxima iniciativa
 
-Cuando Artur apruebe la especificación, la etapa siguiente es el plan de implementación, y después el código escrito por `el-chalan-dev`. Esa etapa no forma parte de este cambio.
+El plan del MVP en seco está en `.ai/runs/2026-10-19-logs-watcher/05-implementation-plan.md`. El código lo escribe `el-chalan-dev` desde un VPS, con ponytail (ADR-0026). Este cambio no incluye ese código.
