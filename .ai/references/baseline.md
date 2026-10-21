@@ -12,7 +12,7 @@ No hay despliegue. El diseño que deberá implementarse después de la revisión
 
 ## Dependencias e integraciones
 
-Ninguna está conectada. El servicio, cuando exista, hablará con la API y los webhooks de Sentry, la API de consultas de PostHog, una GitHub App, y un endpoint de chat compatible con OpenAI. El `owner`, el `name`, la organización de Sentry, el slug, `productionEnvironments` y el `projectId` de PostHog del primer target son configuración de despliegue, sin valor por defecto (ADR-0017, ADR-0018, ADR-0019). `baseUrl` vale `https://sentry.io` si no se escribe otra. El host de PostHog es `https://us.posthog.com`. El proveedor LLM de ese primer target sigue en las decisiones abiertas de `03-specification.md`.
+Ninguna está conectada. El servicio, cuando exista, hablará con Sentry, PostHog, los drenajes de logs de Railway, Vercel y Cloudflare, una GitHub App, el endpoint documentado de JEv (`POST https://api.typesafe.ai/v1/systemone`) para importancia y urgencia, y un endpoint de chat compatible con OpenAI para los parches. El `owner`, el `name`, la organización de Sentry, el slug, `productionEnvironments` y el `projectId` de PostHog del primer target son configuración de despliegue, sin valor por defecto (ADR-0017, ADR-0018, ADR-0019). `baseUrl` vale `https://sentry.io` si no se escribe otra. El host de PostHog es `https://us.posthog.com`. El `modelId` inicial del clasificador es `jev-latest`. El proveedor LLM de generación de ese primer target sigue en OQ-4.
 
 ## Riesgos y deuda conocida
 

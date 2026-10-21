@@ -53,6 +53,8 @@ Cubre errores mostrados (`$exception`), fricción (`$rageclick`, `$dead_click`),
 
 No se construyen ahora. El diseño no las cierra por dentro: el puerto `IssueTracker` admite otro adaptador (Linear, ADR-0001) y el puerto `DocsPublisher` admite otro publicador (Mintlify, ADR-0002). Los embeddings de docs quedan fuera hasta que un ADR nuevo los active (ADR-0012). Ampliar el auto-fix a otras clases exige reabrir ADR-0011. Añadir otro repositorio no es una fase posterior: es otra entrada en `targets` (ADR-0017).
 
+La fase de CI es posterior al bucle de fix del MVP (ADR-0024). Empieza solo con `phases.cicd` en `true`. El valor inicial es `false`. Mientras está apagada, nadie edita `.github/workflows/`. Encendida, solo el job `cicd_improve` puede hacerlo, con diffs de como máximo 80 líneas, y solo si la CI de la rama por defecto ya está en verde. El agente de fix no edita workflows ni en esa fase. Si el pipeline queda en rojo, no hay otra edición automática hasta que una persona lo deje en verde.
+
 ### Targets
 
 Decisión cerrada en ADR-0017. OQ-1 ya no es una pregunta de producto.
@@ -133,6 +135,22 @@ Archivo `/etc/logs-watcher/config.json`, modo `640`, fuera de git. El proceso ar
         "apiKeyEnv": "LLM_API_KEY",
         "modelEnv": "LLM_MODEL"
       },
+      "logs": {
+        "railway": { "webhookSecretEnv": "RAILWAY_LOG_WEBHOOK_SECRET" },
+        "vercel": { "webhookSecretEnv": "VERCEL_LOG_WEBHOOK_SECRET" },
+        "cloudflare": { "webhookSecretEnv": "CLOUDFLARE_LOG_WEBHOOK_SECRET" }
+      },
+      "importance": {
+        "adapter": "typesafe-system-one",
+        "modelId": "jev-latest",
+        "apiKeyEnv": "TYPESAFE_API_KEY"
+      },
+      "issueLanguage": "both",
+      "autoMerge": {
+        "urgencyAtMost": "low",
+        "severityBlocks": ["blocker", "truncated", "flow-blocked", "unclassified"]
+      },
+      "phases": { "cicd": false },
       "testCommand": null
     }
   ],
@@ -171,7 +189,9 @@ Variables de entorno, también fuera de git:
 | `SENTRY_WEBHOOK_SECRET`, `SENTRY_AUTH_TOKEN` | La vía Sentry del target que las referencia no procesa. |
 | `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_INSTALLATION_ID` | No hay escritura ni lectura de GitHub. La clave por defecto es `/etc/logs-watcher/github-app.pem`. `GITHUB_INSTALLATION_ID` solo se usa si el target deja `installationId` vacío. |
 | `POSTHOG_API_KEY` | No hay barrido de PostHog del target que la referencia. |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No hay llamadas al modelo del target que las referencia. La plantilla determinista sigue en pie. |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | No hay llamadas al modelo del target que las referencia. La plantilla determinista sigue en pie. No afecta al clasificador de importancia. |
+| `TYPESAFE_API_KEY` | `ImportanceClassifier` responde vacío. La urgencia no es `low`. |
+| `RAILWAY_LOG_WEBHOOK_SECRET`, `VERCEL_LOG_WEBHOOK_SECRET`, `CLOUDFLARE_LOG_WEBHOOK_SECRET` | Ese drenaje no se ingiere. |
 | `ALERT_WEBHOOK_URL` | Las alertas quedan solo en el log y en la tabla `alerts`. |
 
 Esos nombres son los que referencia el target de ejemplo. Otro target puede nombrar otras variables. Si la variable que ese target referencia no está, esa vía de ese target no llama al proveedor. `GITHUB_INSTALLATION_ID` vacío y `github.installationId` vacío impiden la API de GitHub de ese target aunque owner y name ya estén puestos.
@@ -183,9 +203,9 @@ Esos nombres son los que referencia el target de ejemplo. Otro target puede nomb
 - Descargar o enlazar session replay. Guardar `distinct_id`, correo, IP o texto libre de la UI.
 - Linear, Mintlify y embeddings.
 - Alta disponibilidad y más de un worker. Vigilar otro repositorio no está fuera de alcance: es otra entrada de `targets`.
-- Editar workflows de CI, lockfiles, manifiestos de dependencias o archivos de `.github/`.
-- Ejecutar como instrucción el texto que venga en un stack, un diff o un comentario que no sea un comando exacto.
-- Fusionar PRs, activar auto-merge o aprobar con la propia App.
+- Editar workflows de CI durante un arreglo normal, lockfiles, manifiestos de dependencias o el resto de `.github/`. La excepción de workflows es solo el job `cicd_improve` con la fase encendida (ADR-0024).
+- Ejecutar como instrucción el texto que venga en un stack, un diff, un log o un comentario que no sea un comando exacto.
+- Activar el auto-merge de GitHub, aprobar con la propia App, o fusionar fuera de ADR-0022.
 - Inventar nombres de eventos de pago, de formularios o de entornos de producción.
 
 ## Flujo principal
@@ -358,13 +378,29 @@ El servicio solo reemplaza los bloques `logs-watcher-facts`, `logs-watcher-sever
 - Firmas: `error-shown` es tipo de excepción más el mensaje en minúsculas, con las tandas de dígitos cambiadas por `#`, espacios colapsados y recorte a 120 caracteres. `friction` es nombre del evento más pathname más tag. `validation` es nombre del evento más pathname. `drop-off` es id del embudo más el índice del paso de origen. El texto interior del elemento no entra en la firma.
 - Comentarios de actualización: `<!-- logs-watcher-update: {id} -->`, con `{id}` igual al id de evento o al fin de ventana. Si el marcador ya existe, no se comenta otra vez.
 
+### Logs de Railway, Vercel y Cloudflare
+
+Además de Sentry y PostHog, los logs de Railway, Vercel y Cloudflare son fuente de verdad del fallo (ADR-0020). Entran por `POST /webhooks/logs/{targetId}/{source}` con `source` igual a `railway`, `vercel` o `cloudflare`. El adaptador verifica la firma con el secreto de esa fuente y con el esquema que ese proveedor documenta para su drenaje. El evento normalizado guarda mensaje, timestamp, nivel si viene, y el id de entrega. El cuerpo es dato no confiable. Sin secreto, esa fuente no se ingiere.
+
+La firma de deduplicación es el tipo de excepción más el frame superior si se leen en el mensaje. Si no, el mensaje en minúsculas, con las tandas de dígitos cambiadas por `#`, espacios colapsados y recorte a 120 caracteres. Coincide con un grupo de Sentry del mismo target si la firma es la del grupo o si el mensaje normalizado es igual al título normalizado.
+
+Si coincide, no se abre otro issue. Se añade la fuente al bloque `logs-watcher-sources` y se comenta una vez con `<!-- logs-watcher-source: {source}:{deliveryId} -->`. La severidad no baja. Si la evidencia nueva sube la clase, se recalcula. Si no coincide, se abre un issue de esa fuente con la misma rúbrica. La clave de grupo usa el prefijo `log:` y el SHA-256 de la firma. No es un id de Sentry. Sin booleanos suficientes la clase es `unclassified` y no hay pull request de arreglo. El mismo fallo en Sentry y en un log es un solo issue, con las dos fuentes en el bloque.
+
+### Importancia y urgencia
+
+Después de tener el texto depurado del fallo, el puerto `ImportanceClassifier` devuelve `importance` y `urgency`, cada una `low`, `medium` o `high` (ADR-0021). No es el modelo de OQ-4. El adaptador inicial es `typesafe-system-one` y el `modelId` inicial es `jev-latest`, el alias que TypeSafe documenta para JEv. Llama a `POST https://api.typesafe.ai/v1/systemone`. No se inventa otro endpoint, otro cuerpo ni un precio. Las dos preguntas son `choice` con etiquetas `low`, `medium` y `high`. El fallo va en `state`. Si falta `TYPESAFE_API_KEY` o la llamada falla, las dos salen vacías y la urgencia no es `low`. El issue guarda las dos y el `modelId` versionado que devuelve la respuesta.
+
+### Idioma del issue
+
+`issueLanguage` es `es`, `en` o `both`. El valor por defecto es `both` (ADR-0014). Con `es` o `en`, todo el texto del servicio va en ese idioma. Con `both`, si el texto que dispara el hallazgo tiene un idioma claro según el conteo de palabras de ADR-0014, se usa ese; si no, español. La elección se guarda y no cambia. Hay una plantilla por idioma, con las mismas secciones. El inglés usa los títulos What the error does, Context, What it affects, Severity, Sources y Progress. No se mezclan en un mismo cuerpo. Las citas se copian literales.
+
 ### Flujo del agente de fix
 
 Solo para `blocker`, `truncated` y `flow-blocked`. Rama: `logs-watcher/fix-{targetId}-{sentryIssueId}-{8 primeros hex de generationKey}`. `generationKey` del fix: SHA-256 de `fix\n{targetId}\n{sentryIssueId}\n{latestEventId}\n{baseSha}`.
 
 Pasos:
 
-1. Clonar con profundidad 1 la rama por defecto, con el installation token, en `/var/lib/logs-watcher/work/{proposalId}`. Borrar ese directorio al terminar el job, bien o mal.
+1. Fetch del espejo bare del target en `/var/lib/logs-watcher/mirrors/{targetId}` y un worktree solo de este job en `/var/lib/logs-watcher/worktrees/{jobId}` (ADR-0023). Borrar el worktree al terminar, bien o mal.
 2. Una llamada LLM con el evento depurado, la lista de archivos que el stack cita y que existan en el clon (como máximo 8, 20 000 caracteres cada uno) y el esquema de abajo. El texto va dentro de `<untrusted>`.
 3. Validar. Si falla, una segunda llamada con los códigos de error. Si vuelve a fallar, no hay PR: comentario en el issue con el código `fix_invalid`. El progreso se queda en `detectado`.
 4. `git apply --check`. Si no aplica, no hay PR y el comentario lleva `fix_does_not_apply`.
@@ -377,7 +413,7 @@ Esquema que debe cumplir el modelo:
 ```json
 {
   "refusal": "none",
-  "summary": "texto en español, máximo 400 caracteres",
+  "summary": "texto en el idioma del issue, máximo 400 caracteres",
   "evidence": [{ "source": "event", "quote": "cita literal de al menos 8 caracteres" }],
   "patches": [{ "path": "src/orders.ts", "before": "texto exacto", "after": "texto de reemplazo" }],
   "newTests": [{ "path": "src/orders.test.ts", "content": "archivo completo" }]
@@ -423,7 +459,7 @@ Cuerpo del PR:
 
 ## Aprobación
 
-El servicio no fusiona. Una persona con asociación OWNER, MEMBER o COLLABORATOR escribe exactamente:
+Esta clase exige una persona. La regla general está en la sección Fusión automática.
 
 /logs-watcher approve
 
@@ -439,17 +475,23 @@ Comandos, solo si el cuerpo recortado es exactamente uno de estos y el autor cum
 
 | Comando | Efecto |
 | --- | --- |
-| `/logs-watcher approve` | Propuesta `approved`, etiqueta `logs-watcher:approved`, progreso `aprobada`. No llama a merge. |
+| `/logs-watcher approve` | Propuesta `approved`, etiqueta `logs-watcher:approved`, progreso `aprobada`. No fusiona si la clase está en `severityBlocks`. |
 | `/logs-watcher reject` | Propuesta `rejected`, progreso `rechazada`. No cierra el issue. |
 | `/logs-watcher refresh` | Solo desde `rejected` o `stale`. Cierra el PR viejo si sigue abierto, crea otra propuesta y otra rama con la base y el evento actuales. |
 
 Un comentario de la propia App, o de cualquier `Bot`, se ignora. El comando en el issue vale si el marcador de Sentry está en ese issue y hay un PR abierto ligado; si no hay PR, se responde `no hay PR abierto`.
 
-Si el PR se cierra y `merged` es verdadero: progreso `resuelta` con el SHA, el issue de GitHub se cierra con razón `completed`, la propuesta sigue `approved`. Si se cierra sin merge: propuesta `rejected`, progreso `rechazada`, el issue sigue abierto.
+Si el PR se cierra y `merged` es verdadero: progreso `resuelta` con el SHA, la urgencia y si la fusión fue automática o de una persona. El issue de GitHub se cierra con razón `completed`. La propuesta sigue `approved`. Si se cierra sin merge: propuesta `rejected`, progreso `rechazada`, el issue sigue abierto.
 
 Si Sentry marca el grupo como resuelto, se comenta y no se cierra el issue de GitHub.
 
-La propuesta pasa a `stale` cuando el parche ya no aplica sobre la base nueva o sobre los blobs nuevos. No hay force-push.
+La propuesta pasa a `stale` cuando el parche ya no aplica sobre la base nueva o sobre los blobs nuevos. No hay force-push. Si el merge de prueba en el worktree encuentra conflicto, la única resolución es volver a aplicar el parche `{ before, after }` ya verificado, y solo si `git apply --check` pasa sobre la base nueva. Si no pasa, sigue `stale` y lo toma una persona. No se usa `ours` ni `theirs` en hunks solapados (ADR-0023).
+
+### Fusión automática
+
+El servicio fusiona un pull request solo cuando la urgencia es `low`, la CI de ese SHA está en verde y el merge en el worktree del job queda limpio. Las clases `blocker`, `truncated` y `flow-blocked` siguen exigiendo una persona, y `unclassified` también. Artur puede mover este umbral en `autoMerge.urgencyAtMost` y `autoMerge.severityBlocks`. El modo en seco no fusiona. Un pull request desde un fork no se fusiona. Cada fusión, automática o de una persona, queda escrita en el issue con el SHA, la urgencia y si fue automática.
+
+La CI está en verde solo cuando el estado combinado de ese SHA es `success` y cada check de ese SHA terminó en `success`. Pendiente no es verde. Si no hay ningún check ni ningún estado, la CI no está en verde. Urgencia vacía no es `low`. El orden de `urgencyAtMost` es `low`, luego `medium`, luego `high`. El merge de prueba es `git merge --no-commit --no-ff` de la rama por defecto sobre el HEAD del arreglo, en el worktree de ese job. Limpio significa salida 0 y ningún archivo sin fusionar. Después el worktree vuelve a ese HEAD y no se publica el ensayo. La llamada de fusión usa el método `merge` y no activa el auto-merge de GitHub. En modo en seco, si la regla se cumpliría, se registra `would_auto_merge` y no se llama a la API (ADR-0022).
 
 ### Deriva de documentación
 
@@ -671,6 +713,6 @@ Sigue abierta una pregunta, sobre el primer target. El implementador no inventa 
 
 ### OQ-4. Proveedor LLM y salida de código depurado
 
-Para el primer target, ¿a qué endpoint compatible con `/chat/completions` se puede llamar, con qué modelo, y se acepta enviar fuera del VPS stacks, diffs y fragmentos de `docs/` de ese target ya pasados por el depurador?
+Para el primer target, ¿a qué endpoint compatible con `/chat/completions` se puede llamar, con qué modelo, y se acepta enviar fuera del VPS stacks, diffs y fragmentos de `docs/` de ese target ya pasados por el depurador? Esta pregunta no elige el clasificador de importancia ni de urgencia. Ese puerto ya está decidido en ADR-0021, con JEv como primer modelo.
 
 La respuesta da valor a las variables que nombra el bloque `llm` de esa entrada. Sin esas variables no hay llamadas para ese target. La clasificación determinista y los issues de plantilla siguen. No hay PR de fix ni parche de docs de ese target, porque ambos necesitan el modelo. El servicio no elige proveedor ni asume una residencia de datos. Otro target puede nombrar otras variables sin cambiar el esquema.

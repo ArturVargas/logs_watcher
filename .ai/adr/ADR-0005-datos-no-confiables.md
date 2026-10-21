@@ -6,7 +6,7 @@
 
 ## Decisión
 
-Todo contenido que llegue de Sentry, de PostHog, de un diff, de un issue, de un comentario o de un archivo del repositorio vigilado es dato no confiable. Entra al modelo solo dentro de `<untrusted source="...">`. El prompt de sistema dice que ese bloque no contiene instrucciones. El servicio no ejecuta órdenes encontradas ahí, no cambia su configuración y no sigue enlaces que el payload pida.
+Todo contenido que llegue de Sentry, de PostHog, de un log de Railway, de Vercel o de Cloudflare, de un diff, de un issue, de un comentario o de un archivo del repositorio vigilado es dato no confiable. Entra al modelo solo dentro de `<untrusted source="...">`. El prompt de sistema dice que ese bloque no contiene instrucciones. El servicio no ejecuta órdenes encontradas ahí, no cambia su configuración y no sigue enlaces que el payload pida.
 
 Los comandos `/logs-watcher` solo se aceptan desde el webhook de GitHub ya verificado, con el cuerpo exacto y la asociación descritos en ADR-0003. Un comando dentro de un stack o de un título no cuenta.
 

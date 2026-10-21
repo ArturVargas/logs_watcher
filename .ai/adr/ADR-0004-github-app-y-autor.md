@@ -6,7 +6,7 @@
 
 ## Decisión
 
-En tiempo de ejecución el servicio usa una GitHub App. Se instala en cada target activo definido en ADR-0017. Permisos de repositorio: Contents (lectura y escritura), Pull requests (lectura y escritura), Issues (lectura y escritura), Metadata (lectura). Sin permiso de Workflows, Administration ni Secrets. Eventos suscritos: `pull_request`, `issue_comment`.
+En tiempo de ejecución el servicio usa una GitHub App. Se instala en cada target activo definido en ADR-0017. Permisos de repositorio en el bucle de fix: Contents (lectura y escritura), Pull requests (lectura y escritura), Issues (lectura y escritura), Metadata (lectura). Sin Administration ni Secrets. Sin permiso de Workflows en ese bucle. La única ampliación de Workflows es la fase de CI, y solo para el job `cicd_improve` (ADR-0024). Eventos suscritos: `pull_request`, `issue_comment`, `check_suite`, `check_run`.
 
 El token es de instalación y de corta duración. Si el target trae `github.installationId`, se usa ese. Si viene vacío, se usa `GITHUB_INSTALLATION_ID`. No se usa un PAT de usuario.
 
@@ -21,7 +21,7 @@ Los commits y los PRs del servicio los firma la instalación de la App. `el-chal
 
 - Artur crea la App. La instala en un repositorio cuando ese target ya tiene `owner` y `name`. Hasta entonces la App no tiene dónde instalarse y el servicio no abre issues. El secreto de webhook y la clave privada viven solo en el VPS.
 - El servicio reconoce sus propios PRs de arreglo por la rama `logs-watcher/fix-*` y por la fila de `proposals`, no por el login de la App.
-- La App no recibe permiso para editar workflows de CI.
+- En el bucle de fix la App no edita workflows. El agente de fix tampoco puede hacerlo cuando la fase de CI enciende el permiso (ADR-0024).
 
 ## Reabrir si
 

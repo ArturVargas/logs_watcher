@@ -16,7 +16,7 @@ La fase 1 usa GitHub Issues del repositorio vigilado. El núcleo del servicio de
 ## Consecuencias
 
 - Los issues de Sentry y de PostHog salen por el mismo puerto, con plantillas y etiquetas distintas.
-- Cerrar un issue en Sentry no cierra el issue de GitHub. El issue de GitHub se cierra solo cuando una persona fusiona el PR de arreglo.
+- Cerrar un issue en Sentry no cierra el issue de GitHub. El issue de GitHub se cierra cuando el pull request de arreglo queda fusionado, sea por una persona o por la regla de ADR-0022. El cuerpo del issue dice cuál de las dos fue y el SHA.
 - Un adaptador de Linear posterior tiene que cubrir las mismas operaciones, sin cambiar la rúbrica ni los marcadores.
 
 ## Reabrir si
