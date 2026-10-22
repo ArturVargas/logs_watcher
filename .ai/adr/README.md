@@ -30,3 +30,4 @@ Cada ADR conserva una decisión difícil de revertir, las alternativas y la cond
 | [ADR-0024](ADR-0024-fase-de-ci.md) | La CI se mejora en una fase posterior, con diffs pequeños. |
 | [ADR-0025](ADR-0025-parches-con-qwen-cloud.md) | Los parches los escribe Qwen Cloud. |
 | [ADR-0026](ADR-0026-generacion-y-revision-con-ponytail.md) | La generación y la revisión de código usan ponytail. |
+| [ADR-0027](ADR-0027-revision-por-lenguaje.md) | La revisión determinista usa la herramienta del archivo. |

@@ -21,6 +21,7 @@ Con la fase 1 en marcha y las decisiones abiertas resueltas:
 4. Cada seis horas, PostHog produce issues de hallazgo con la plantilla de PostHog y sin PR.
 5. Repetir el mismo webhook, el mismo grupo de Sentry o el mismo hallazgo no abre un segundo issue.
 6. Stacks, diffs, sesiones y cuerpos de issues no se ejecutan como instrucciones.
+7. Un pull request del target con Solidity, Rust o TypeScript en el diff recibe como mucho un comentario en línea. El comentario cita un hallazgo de la herramienta de ese archivo y no fusiona el pull request. Un archivo de otro lenguaje no recibe un linter inventado.
 
 Un fallo real, para el PR automático, es un evento que pasó los filtros y cuya clase es `blocker`, `truncated` o `flow-blocked` (ADR-0011). Las otras clases sí generan issue.
 
@@ -37,7 +38,8 @@ Un servicio desplegable en un VPS (ADR-0006) que:
 - propone un fix y, si aplica, un parche de `docs/`;
 - barre PostHog y abre issues de hallazgo;
 - guarda cola, propuestas y punteros en Postgres;
-- corta el gasto del modelo y reintenta los fallos transitorios (ADR-0016).
+- corta el gasto del modelo y reintenta los fallos transitorios (ADR-0016);
+- en un `pull_request` del target, asocia el diff a un símbolo y publica un comentario en línea que cita un hallazgo de la herramienta de ese archivo (ADR-0027). Publicar el comentario no fusiona.
 
 El primer arranque es en seco: `LOGS_WATCHER_DRY_RUN=true` guarda propuestas y no llama a ningún endpoint de escritura de GitHub. Si el modelo está configurado, las llamadas sí se hacen y cuentan para el tope. El orden de puesta en marcha está en la arquitectura, sección Operación.
 
@@ -104,6 +106,34 @@ Decisión cerrada en ADR-0025. OQ-4 ya no es una pregunta de producto.
 Los parches de arreglo y de documentación los escribe un modelo de Qwen Cloud. Sirven varios modelos. El id está en la configuración y no hay un modelo único grabado en el servicio. El operador abre su propia cuenta de Qwen Cloud y pone la clave. El servicio no lleva una clave compartida. Artur acepta que el código y los logs ya depurados salgan del VPS hacia esa API. El depurador quita tokens, correos y datos de usuario antes de la llamada. Un payload sin depurar no sale. La base por defecto es `https://maas.qwencloudapi.com/compatible-mode/v1` y la autenticación es `Authorization: Bearer`, como documentan la primera llamada y el chat compatible con OpenAI de Qwen Cloud. JEv no escribe estos parches.
 
 Riesgo a revisar, no una conclusión legal: las condiciones de retención y de uso de datos de la API de Qwen Cloud. Las páginas públicas no se tomaron como una sola regla verificada. Quedan sin comprobar como conclusión.
+
+### Revisión determinista por lenguaje
+
+Decisión cerrada en ADR-0027.
+
+El código vigilado es Solidity, Rust y TypeScript, en el frontend, el backend y la blockchain. La herramienta la elige el lenguaje del archivo. No hay un stack por defecto para todo el diff. El servicio que vigila sigue siendo el proceso Node.js 22 y Postgres 16 de ADR-0006. Esta decisión no lo pasa a Rust, no añade Redis ni NATS, y no añade embeddings.
+
+Las herramientas corren solo cuando ese lenguaje está en el diff:
+
+| Lenguaje | Herramientas | AST y símbolos |
+| --- | --- | --- |
+| Solidity (`.sol`) | Slither, Aderyn, solhint | AST de solc o de solidity-parser |
+| Rust (`.rs`) | clippy, cargo-audit, cargo-deny | AST de syn. El grafo de símbolos sale de rust-analyzer cuando está disponible |
+| TypeScript | el eslint y el `tsc` de ese repositorio | AST del compilador de TypeScript o de tree-sitter |
+
+Un archivo de otro lenguaje no recibe un linter inventado. Si ese lenguaje no está en el diff, su herramienta no se invoca. El eslint y el `tsc` son los del repositorio vigilado: no se inventa una configuración. Si rust-analyzer no está, el corte sigue con syn y no inventa otro grafo.
+
+Qwen Cloud sigue escribiendo los parches (ADR-0025). JEv sigue clasificando importancia y urgencia (ADR-0021). Ponytail sigue generando y revisando el código de este repositorio (ADR-0026). Ninguno de los tres sustituye a esta capa.
+
+El primer corte se queda en esto:
+
+1. Un webhook `pull_request` con acción `opened`, `synchronize` o `reopened`, firma válida, target activo y entrega nueva. El webhook encola `deterministic_review`. No corre la herramienta en el request.
+2. El diff se asocia a un símbolo con el AST de ese lenguaje. El archivo es el primero, en orden de path, que sea `.sol`, `.rs` o TypeScript cubierto por el `tsc` de ese repositorio.
+3. Un hallazgo determinista. El orden del corte es fijo: en Solidity, Slither, luego Aderyn, luego solhint; en Rust, clippy, luego cargo-audit, luego cargo-deny; en TypeScript, el eslint del repositorio, luego `tsc`. Se cita el primero.
+4. Un comentario en línea, en la línea del diff de ese símbolo, que nombra la herramienta, el identificador del hallazgo y el símbolo. El texto pasa por el depurador.
+5. Publicar el comentario no llama a la API de merge y no aprueba el pull request.
+
+La clave del job es `review:{deliveryId}`, con `deliveryId` igual a `X-GitHub-Delivery`. La misma entrega no publica un segundo comentario. Sin símbolo o sin hallazgo, no hay comentario. Una herramienta ausente no se sustituye por la de otro lenguaje: el log queda en `review_tool_missing` y no se publica un hallazgo fabricado. El modo en seco no publica el comentario, igual que no llama a los otros endpoints de escritura de GitHub. Un pull request desde un fork no recibe push. El comentario, si se publica, no fusiona y no empuja.
 
 ### Configuración que el servicio no inventa
 
@@ -217,6 +247,9 @@ Esos nombres son los que referencia el target de ejemplo. Otro target puede nomb
 - Ejecutar como instrucción el texto que venga en un stack, un diff, un log o un comentario que no sea un comando exacto.
 - Activar el auto-merge de GitHub, aprobar con la propia App, o fusionar fuera de ADR-0022.
 - Inventar nombres de eventos de pago, de formularios o de entornos de producción.
+- Un linter inventado para un lenguaje que no sea Solidity, Rust o TypeScript, y un stack de revisión único para todos los archivos (ADR-0027).
+- Pasar el servicio a Rust, añadir Redis o NATS, o usar embeddings para asociar un diff a un símbolo.
+- Fusionar, o aprobar, al publicar el comentario de la revisión determinista.
 
 ## Flujo principal
 
@@ -666,6 +699,12 @@ El bloque de conteos se reemplaza en cada barrido si los marcadores aparecen una
 | Con `funnels` y `validationEvents` vacíos, y con el ejemplo de pago y formulario solo en comentarios, no se consultan esos eventos ni se abre un issue. | Barrido con la configuración de ejemplo. |
 | Al superar 5.00 USD en el día UTC, el job de modelo queda `deferred_budget` y el issue determinista de un `blocker` sí se crea. | Libro de coste precargado. |
 | `LOGS_WATCHER_DRY_RUN=true` no llama a `POST /repos/.../issues` ni a pulls. | Registro de clientes. |
+| Un diff con un solo `.sol` cita un hallazgo de Slither, Aderyn o solhint, con AST de solc o solidity-parser, y no corre clippy ni eslint sobre ese archivo. | Fixture de un solo `.sol`. |
+| Un diff con un solo `.rs` cita un hallazgo de clippy, cargo-audit o cargo-deny. El AST sale de syn. El grafo de rust-analyzer entra solo si está disponible. | Fixture de un solo `.rs`, con y sin rust-analyzer. |
+| Un diff de TypeScript cita un hallazgo del eslint o del `tsc` de ese repositorio. El AST sale del compilador de TypeScript o de tree-sitter. | Fixture con la configuración del repo. |
+| Un diff de otro lenguaje, o un diff sin ese lenguaje, no invoca un linter inventado ni publica comentario de esta capa. | Fixture `.py` y fixture solo de `docs/`. |
+| El primer corte publica un comentario en línea que cita la herramienta, el identificador y el símbolo, y no llama a la API de merge. | Doble que falle si hay merge o un segundo comentario en la misma entrega. |
+| Con el modo en seco, ese comentario no se publica. | Registro de clientes de GitHub. |
 
 ## Errores y casos límite
 
@@ -706,6 +745,7 @@ Tasa de salida: GitHub 4 solicitudes por segundo, Sentry 2, PostHog 1. Ante 429 
   - Log JSON con `ts`, `level`, `msg` en `snake_case` inglés, `jobId`, `kind`, `sentryIssueId`, `githubIssue`, `pr`, `durationMs`. Sin cuerpos, sin cabeceras de autorización y sin texto del evento dentro de `msg`.
   - Métricas en `GET /metrics`, solo en `127.0.0.1:9090`: `logs_watcher_webhooks_total{source,result}`, `logs_watcher_jobs_total{kind,result}`, `logs_watcher_llm_tokens_total{direction}`, `logs_watcher_budget_deferred_total`, `logs_watcher_proposals_total{kind,state}`, `logs_watcher_docs_prefilter_total{result}`.
   - El worker escribe `worker_heartbeat` cada 30 segundos.
+  - Si la herramienta del lenguaje que está en el diff no se puede correr, el log es `review_tool_missing`. No se publica un hallazgo fabricado.
   - Alertas locales, y POST a `ALERT_WEBHOOK_URL` si existe, con `{ "code", "detail" }` depurado y tope de 5 segundos: heartbeat de más de 2 minutos, job que pasa a `dead`, más de 10 firmas inválidas en 10 minutos, cualquier `deferred_budget`.
 - Alertas o runbook: el runbook de operador (reintentar un job `dead`, subir el tope, rotar un secreto sin apagar la verificación) está en la arquitectura, sección Operación. Cada job `dead` deja `last_error` depurado y un código estable.
 
@@ -720,3 +760,5 @@ OQ-2 está cerrada. Organización, slug y `productionEnvironments` de Sentry son
 OQ-3 está cerrada. El host de PostHog es `https://us.posthog.com`. `projectId`, `validationEvents` y `funnels` son configuración de despliegue (ADR-0019).
 
 OQ-4 está cerrada. Los parches los escribe Qwen Cloud (ADR-0025 y la sección Parches con Qwen Cloud). El id de modelo y la clave los pone el operador. JEv no escribe parches.
+
+La revisión determinista está cerrada (ADR-0027 y la sección Revisión determinista por lenguaje). El código vigilado es Solidity, Rust y TypeScript. La herramienta es la del archivo. El primer corte es un webhook `pull_request`, un símbolo, un hallazgo y un comentario en línea. Publicar el comentario no fusiona.
