@@ -4,7 +4,7 @@
 
 Un proceso Node.js 22 en un VPS, con Postgres 16 en el mismo host, recibe webhooks y ejecuta una cola. El comportamiento normativo (rúbrica, plantillas, filtros, umbrales y comandos) está en `03-specification.md`. Este documento fija componentes, datos, puertos, cerco del modelo y operación.
 
-Las decisiones difíciles de revertir están aceptadas en `.ai/adr/`, del ADR-0001 al ADR-0025. ADR-0003 está reemplazada en la prohibición absoluta de fusionar: la regla vigente es ADR-0022. No queda una pregunta de producto abierta. Los parches los escribe Qwen Cloud (ADR-0025). JEv no los escribe (ADR-0021).
+Las decisiones difíciles de revertir están aceptadas en `.ai/adr/`, del ADR-0001 al ADR-0027. ADR-0003 está reemplazada en la prohibición absoluta de fusionar: la regla vigente es ADR-0022. No queda una pregunta de producto abierta. Los parches los escribe Qwen Cloud (ADR-0025). JEv no los escribe (ADR-0021). La generación y la revisión del código de este repositorio usan ponytail (ADR-0026). La revisión determinista del código vigilado usa la herramienta del archivo (ADR-0027): Solidity con Slither, Aderyn y solhint; Rust con clippy, cargo-audit y cargo-deny; TypeScript con el eslint y el `tsc` de ese repositorio. El servicio sigue en Node.js 22 y Postgres 16.
 
 ```mermaid
 flowchart TD
@@ -44,6 +44,7 @@ flowchart TD
 | `worktree` | Un directorio por job. Prueba el merge y no publica el ensayo. |
 | `fix-agent` | Una llamada, o dos si la primera no valida, y abre el PR si el parche pasa los guardarraíles. No edita workflows. |
 | `docs-drift` | Prefiltro barato y, si hay candidatos, una llamada y un PR o un commit en la rama de fix. |
+| `deterministic-review` | Asocia el diff a un símbolo y publica un comentario que cita un hallazgo de la herramienta de ese archivo. No fusiona. |
 | `scrubber` | Quita secretos y PII antes de salir del proceso hacia logs, GitHub, el modelo o un error guardado. |
 | `cost-guard` | Suma `cost_ledger` del día UTC y niega la llamada si ya llegó al tope. |
 | `IssueTracker` | Puerto de tickets. Solo se implementa `GitHubIssuesAdapter`. |
@@ -61,6 +62,7 @@ Jobs y claves:
 | `propose_fix` | `fix:{generationKey}` |
 | `docs_drift` | `docs:{generationKey}` |
 | `posthog_scan` | `posthog:{targetId}:{windowEndUtcHour}` |
+| `deterministic_review` | `review:{deliveryId}` |
 
 Si llega otro evento de Sentry con el job de ese grupo en `queued` o `running`, solo se pone `groups.dirty`. Al terminar, si `dirty` es verdadero, el mismo row vuelve a `queued`. No se inserta una segunda clave.
 
@@ -157,6 +159,27 @@ flowchart TD
 ```
 
 PostHog no entra en estos diagramas de arreglo. El reloj encola `posthog_scan`, las consultas agregan, y `IssueTracker` crea o actualiza el issue de hallazgo. No hay flecha hacia `fix-agent`.
+
+Revisión determinista del código vigilado (ADR-0027). El webhook solo encola. El worker elige la herramienta del archivo:
+
+```mermaid
+flowchart TD
+  pullRequest[PullRequestWebhook] --> enqueue[EnqueueDeterministicReview]
+  enqueue --> language{LanguageInDiff}
+  language -->|other| skip[NoInventedLinter]
+  language -->|sol rs or ts| symbol[MapDiffToSymbol]
+  symbol --> finding[OneDeterministicFinding]
+  finding --> comment[InlineCommentCitesFinding]
+  comment --> noMerge[DoesNotMerge]
+```
+
+| Lenguaje en el diff | Herramientas, en ese orden | AST y símbolos |
+| --- | --- | --- |
+| Solidity (`.sol`) | Slither, Aderyn, solhint | solc o solidity-parser |
+| Rust (`.rs`) | clippy, cargo-audit, cargo-deny | syn. rust-analyzer solo si está disponible |
+| TypeScript | eslint y `tsc` de ese repositorio | compilador de TypeScript o tree-sitter |
+
+Un archivo de otro lenguaje no recibe un linter inventado. Si el lenguaje no está en el diff, su herramienta no se invoca. El primer corte publica un comentario y no llama a la API de merge. Qwen Cloud no redacta ese comentario. JEv no lo clasifica. Ponytail no revisa este diff: ponytail sigue en el código de logs_watcher. No hay embeddings, ni Redis, ni NATS, ni un servicio en Rust.
 
 ## Datos y fuente de verdad
 
@@ -319,6 +342,8 @@ Los frames no incluyen `vars`. PostHog no selecciona identificadores de persona.
 
 El comando `/logs-watcher` solo se acepta desde `issue_comment` con firma de GitHub válida, cuerpo exacto y asociación de ADR-0003. El mismo texto dentro de un stack no es un comando.
 
+El comentario de la revisión determinista usa el permiso de Pull requests ya concedido. No pide Workflows. No llama a la API de merge. El texto del hallazgo pasa por el depurador antes de salir a GitHub. La salida de Slither, Aderyn, solhint, clippy, cargo-audit, cargo-deny, eslint o `tsc` es dato, no una instrucción.
+
 ## Operación
 
 - Despliegue:
@@ -330,7 +355,7 @@ El comando `/logs-watcher` solo se acepta desde `issue_comment` con firma de Git
   6. `owner`, `name`, la organización de Sentry, el slug, `productionEnvironments`, el `projectId` de PostHog y el id de modelo de Qwen se rellenan en el despliegue, sin valor por defecto. `baseUrl` vacía vale `https://sentry.io`. El host de PostHog es `https://us.posthog.com`. La base de Qwen vacía vale `https://maas.qwencloudapi.com/compatible-mode/v1`. Sin `projectId` no hay barrido de PostHog. Sin id de modelo o sin clave de Qwen no hay parche. `validationEvents` y `funnels` vacíos no consultan esos eventos. Cada dato que falte deja esa vía de ese target en `config_missing`, `production_environments_empty` o el target inactivo, sin abrir un issue de esa vía.
   7. Arrancar con `LOGS_WATCHER_DRY_RUN=true`. Revisar al menos diez filas de clasificación o propuestas guardadas, sin escritura en GitHub.
   8. Pasar `LOGS_WATCHER_DRY_RUN=false` es un cambio de configuración consciente, no el valor inicial.
-- Monitoreo y alertas: las métricas y los códigos de alerta están en la especificación, sección Observabilidad. `msg` de log es un código estable. Los que esta operación exige son `webhook_rejected`, `event_dropped`, `job_dead`, `budget_deferred`, `proposal_stale`, `config_missing`, `docs_prefilter_empty_large_corpus`, `docs_diff_too_large`, `docs_map_invalid`.
+- Monitoreo y alertas: las métricas y los códigos de alerta están en la especificación, sección Observabilidad. `msg` de log es un código estable. Los que esta operación exige son `webhook_rejected`, `event_dropped`, `job_dead`, `budget_deferred`, `proposal_stale`, `config_missing`, `docs_prefilter_empty_large_corpus`, `docs_diff_too_large`, `docs_map_invalid`, `review_tool_missing`.
 - Rollback: parar la unidad systemd. Los webhooks dejan de aceptarse y no hay pushes nuevos. Los PRs abiertos se quedan para una persona. Volver a `LOGS_WATCHER_DRY_RUN=true` corta la escritura y mantiene la ingesta. No hay migración que deshacer en el repositorio vigilado más allá de cerrar PRs a mano.
 
 Comandos locales, sin puerto de red, el binario `logs-watcher`:
@@ -353,7 +378,7 @@ Runbook corto:
 
 ## Riesgos y decisiones abiertas
 
-No hay decisiones abiertas en este documento. OQ-1, OQ-2, OQ-3 y OQ-4 están cerradas. No queda una pregunta de producto abierta. El riesgo de las condiciones de retención y de uso de datos de Qwen Cloud sigue sin verificar como conclusión (ADR-0025).
+No hay decisiones abiertas en este documento. OQ-1, OQ-2, OQ-3 y OQ-4 están cerradas. No queda una pregunta de producto abierta. El riesgo de las condiciones de retención y de uso de datos de Qwen Cloud sigue sin verificar como conclusión (ADR-0025). La revisión determinista está cerrada en ADR-0027.
 
 Riesgos que se aceptan en la fase 1:
 
@@ -365,3 +390,4 @@ Riesgos que se aceptan en la fase 1:
 - Cualquier colaborador con escritura puede aprobar un PR del bot.
 - El auto-fix no cubre jobs sin usuario ni errores que no rompen el flujo. Esos quedan en el issue para una persona.
 - El valor inicial de `blockerTransactions` puede no coincidir con las rutas reales. Sustituirlo en la configuración no reabre ADR-0010. Se reabre solo si clasificar por una lista de rutas deja de servir.
+- Slither, Aderyn, solhint, clippy, cargo-audit, cargo-deny, el eslint del repositorio o `tsc` pueden no estar en el host. Si faltan, el corte no inventa otra herramienta. El log es `review_tool_missing` y no hay comentario fabricado.
