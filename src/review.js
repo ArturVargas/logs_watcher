@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { dryRun } from './config.js';
@@ -168,6 +168,7 @@ function commandFor(tool, file, repoDir) {
   if (tool === 'clippy') return { cmd: 'cargo', args: ['clippy', '--message-format=json'] };
   if (tool === 'cargo-audit') return { cmd: 'cargo', args: ['audit', '--json'] };
   if (tool === 'cargo-deny') return { cmd: 'cargo', args: ['deny', '--format', 'json', 'check'] };
+  if (!repoDir) return null;
   if (tool === 'eslint') return { cmd: join(repoDir, 'node_modules/.bin/eslint'), args: ['-f', 'json', file] };
   if (tool === 'tsc') return { cmd: join(repoDir, 'node_modules/.bin/tsc'), args: ['--noEmit', '--pretty', 'false'] };
   return null;
@@ -190,13 +191,13 @@ function runTool(tool, { file, repoDir }) {
       settled = true;
       resolve(value);
     };
-    const child = spawn(spec.cmd, spec.args, { cwd: repoDir, env: toolEnv(), timeout: 60_000 });
+    const child = spawn(spec.cmd, spec.args, { cwd: repoDir, env: toolEnv(), timeout: 300_000 });
     child.stdout?.on('data', (chunk) => {
       if (stdout.length < 1_000_000) stdout += chunk;
     });
     child.stderr?.on('data', () => {});
     child.on('error', (err) => finish({ ran: err.code !== 'ENOENT', stdout: '' }));
-    child.on('close', () => finish({ ran: true, stdout }));
+    child.on('close', (code, signal) => finish({ ran: signal == null, stdout }));
   });
 }
 
@@ -406,9 +407,38 @@ function watchedFiles(files) {
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function git(args, { cwd, env }) {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd, env, timeout: 300_000 });
+    child.stdout?.on('data', () => {});
+    child.stderr?.on('data', () => {});
+    child.on('error', () => resolve(false));
+    child.on('close', (code, signal) => resolve(signal == null && code === 0));
+  });
+}
+
+const GITHUB_NAME = /^[A-Za-z0-9_.-]+$/;
+
+export async function checkoutHead({ owner, name, sha, token, dir, remote }) {
+  if (!dir || !/^[0-9a-f]{40}$/.test(String(sha ?? ''))) return false;
+  const url = remote ?? (GITHUB_NAME.test(owner) && GITHUB_NAME.test(name) ? `https://github.com/${owner}/${name}.git` : '');
+  if (!url) return false;
+  const base = { ...toolEnv(), GIT_TERMINAL_PROMPT: '0' };
+  if (!await git(['init'], { cwd: dir, env: base })) return false;
+  if (!await git(['remote', 'add', 'origin', url], { cwd: dir, env: base })) return false;
+  const fetchEnv = { ...base };
+  if (token) {
+    fetchEnv.GIT_CONFIG_COUNT = '1';
+    fetchEnv.GIT_CONFIG_KEY_0 = 'http.extraheader';
+    fetchEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+  }
+  if (!await git(['fetch', '--depth', '1', 'origin', sha], { cwd: dir, env: fetchEnv })) return false;
+  return git(['checkout', '--detach', 'FETCH_HEAD'], { cwd: dir, env: base });
+}
+
 async function citeOne(file, { available, run, repoDir }) {
   const language = languageOf(file.path);
-  // shortcut: one tool per file, stop at the first cited finding. The repo eslint and tsc need repoDir; a temp copy of one file cannot see node_modules.
+  // shortcut: Solidity stays one file. TypeScript and Rust use the pull request checkout; eslint and tsc run only when that tree already has node_modules. No npm ci.
   const check = async (dir) => {
     const result = await oneCheck({ language, file: file.path, repoDir: dir, available, run });
     if (!result) return null;
@@ -492,36 +522,87 @@ async function readContent(call, target, sha, file) {
   return { content: Buffer.from(body.content.replace(/\s/g, ''), 'base64').toString('utf8') };
 }
 
-export async function reviewPullRequest({ target, number, sha, files, githubApi, available, run, repoDir }) {
+export async function reviewPullRequest({ target, number, sha, files, githubApi, available, run, repoDir, checkout }) {
   let session = null;
   let list = files;
-  if (!list) {
-    session = await openGithub(target, githubApi);
-    if (session.missing || session.retry || session.dead) return session;
-    const loaded = await loadPullFile(session.call, target, number);
-    if (loaded.retry || loaded.dead) return loaded;
-    list = loaded.files ?? [];
-  }
-  let citation = null;
-  for (const file of watchedFiles(list)) {
-    if (file.content == null) {
-      if (!session) {
-        session = await openGithub(target, githubApi);
-        if (session.missing || session.retry || session.dead) return session;
+  let createdTree = null;
+  let tree = repoDir ?? null;
+  let treeMiss = false;
+  const project = (file) => languageOf(file.path) === 'typescript' || languageOf(file.path) === 'rust';
+  async function ensureTree() {
+    if (tree) return tree;
+    if (treeMiss || dryRun()) return null;
+    if (!session?.token) {
+      session = await openGithub(target, githubApi);
+      if (session.retry || session.dead) return session;
+      if (!session.token) {
+        treeMiss = true;
+        return null;
       }
-      const read = await readContent(session.call, target, sha, file);
-      if (read.retry || read.dead) return read;
-      file.content = read.content ?? '';
     }
-    citation = await citeOne(file, { available, run, repoDir });
-    if (citation?.finding) break;
+    if (dryRun()) return null;
+    const dest = mkdtempSync(join(tmpdir(), 'lw-tree-'));
+    const ok = await (checkout ?? checkoutHead)({
+      owner: target.github.owner,
+      name: target.github.name,
+      sha,
+      token: session.token,
+      dir: dest,
+    });
+    if (!ok) {
+      rmSync(dest, { recursive: true, force: true });
+      treeMiss = true;
+      return null;
+    }
+    tree = dest;
+    createdTree = dest;
+    return dest;
   }
-  if (!citation?.finding) return { published: false, finding: null };
-  if (dryRun()) return { published: false, finding: citation.finding };
-  if (!session) {
-    session = await openGithub(target, githubApi);
-    if (session.missing || session.retry || session.dead) return { ...session, finding: citation.finding };
+  try {
+    if (!list) {
+      if (dryRun()) return { published: false, finding: null };
+      session = await openGithub(target, githubApi);
+      if (session.missing || session.retry || session.dead) return session;
+      const loaded = await loadPullFile(session.call, target, number);
+      if (loaded.retry || loaded.dead) return loaded;
+      list = loaded.files ?? [];
+    }
+    let citation = null;
+    for (const file of watchedFiles(list)) {
+      let dir = project(file) ? repoDir : undefined;
+      if (project(file) && !repoDir) {
+        const got = await ensureTree();
+        if (got?.retry || got?.dead) return { ...got, finding: citation?.finding ?? null };
+        dir = typeof got === 'string' ? got : null;
+        if (dir && file.content == null) {
+          const full = join(dir, file.path);
+          if (existsSync(full)) file.content = readFileSync(full, 'utf8');
+        }
+      }
+      if (file.content == null) {
+        if (dryRun()) file.content = '';
+        else {
+          if (!session?.call) {
+            session = await openGithub(target, githubApi);
+            if (session.missing || session.retry || session.dead) return { ...session, finding: citation?.finding ?? null };
+          }
+          const read = await readContent(session.call, target, sha, file);
+          if (read.retry || read.dead) return { ...read, finding: citation?.finding ?? null };
+          file.content = read.content ?? '';
+        }
+      }
+      citation = await citeOne(file, { available, run, repoDir: dir });
+      if (citation?.finding) break;
+    }
+    if (!citation?.finding) return { published: false, finding: null };
+    if (dryRun()) return { published: false, finding: citation.finding };
+    if (!session?.call) {
+      session = await openGithub(target, githubApi);
+      if (session.missing || session.retry || session.dead) return { ...session, finding: citation.finding };
+    }
+    const posted = await postInline(session.call, { target, number, sha, citation });
+    return { ...posted, finding: citation.finding };
+  } finally {
+    if (createdTree) rmSync(createdTree, { recursive: true, force: true });
   }
-  const posted = await postInline(session.call, { target, number, sha, citation });
-  return { ...posted, finding: citation.finding };
 }

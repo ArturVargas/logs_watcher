@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import http from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, beforeEach, test } from 'node:test';
-import { addedLines, defaultAvailable, enclosingSymbol, languageOf, oneCheck, reviewPullRequest } from '../src/review.js';
+import { addedLines, checkoutHead, defaultAvailable, enclosingSymbol, languageOf, oneCheck, reviewPullRequest } from '../src/review.js';
 import { runOnce } from '../src/worker.js';
 import { listen, openTestDb } from './db.js';
 
@@ -106,6 +107,48 @@ function reviewOpts(run) {
     run: run ?? (async () => ({ ran: true, stdout: slitherStdout() })),
   };
 }
+
+function gitLocal(cwd, args) {
+  const result = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'git failed');
+  return result.stdout.trim();
+}
+
+test('checkoutHead puts the pull request sha on disk without saving the token', async () => {
+  const source = mkdtempSync(join(tmpdir(), 'lw-src-'));
+  const dest = mkdtempSync(join(tmpdir(), 'lw-dst-'));
+  try {
+    gitLocal(source, ['init', '-b', 'main']);
+    mkdirSync(join(source, 'web'));
+    mkdirSync(join(source, 'node_modules/.bin'), { recursive: true });
+    writeFileSync(join(source, 'web/app.ts'), 'export function total() {\n  return 1;\n}\n');
+    writeFileSync(join(source, 'src.rs'), 'fn demo() {}\n');
+    writeFileSync(join(source, 'Cargo.toml'), '[package]\nname = "demo"\nversion = "0.0.0"\n');
+    writeFileSync(join(source, 'Cargo.lock'), '# lock\n');
+    writeFileSync(join(source, 'node_modules/.bin/eslint'), '#!/bin/sh\n');
+    writeFileSync(join(source, 'node_modules/.bin/tsc'), '#!/bin/sh\n');
+    gitLocal(source, ['add', '-A']);
+    gitLocal(source, ['commit', '-m', 'init']);
+    const sha = gitLocal(source, ['rev-parse', 'HEAD']);
+    const token = 'ghs_checkout_secret';
+    const ok = await checkoutHead({ owner: 'acme', name: 'app', sha, token, dir: dest, remote: source });
+    assert.equal(ok, true);
+    assert.equal(readFileSync(join(dest, 'web/app.ts'), 'utf8').includes('function total'), true);
+    assert.equal(existsSync(join(dest, 'Cargo.toml')), true);
+    assert.equal(existsSync(join(dest, 'Cargo.lock')), true);
+    assert.equal(defaultAvailable('eslint', { repoDir: dest }), true);
+    assert.equal(defaultAvailable('tsc', { repoDir: dest }), true);
+    assert.equal(defaultAvailable('clippy', { repoDir: dest }), spawnSync('which', ['cargo']).status === 0);
+    assert.equal(defaultAvailable('cargo-audit', { repoDir: dest }), spawnSync('which', ['cargo-audit']).status === 0);
+    assert.equal(defaultAvailable('cargo-deny', { repoDir: dest }), spawnSync('which', ['cargo-deny']).status === 0);
+    const config = readFileSync(join(dest, '.git/config'), 'utf8');
+    assert.equal(config.includes(token), false);
+    assert.equal(config.includes('ghs_'), false);
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
 
 test('a changed line maps to the enclosing symbol of the watched languages', () => {
   assert.deepEqual([...addedLines(PATCH)], [3]);
@@ -438,6 +481,109 @@ test('the pull request file list is fetched and still publishes one comment', as
   assert.match(posts[0].body.body, /`contracts\/Vault.sol:2` `reentrancy-eth`/);
   assert.equal(state.requests.some((req) => req.path === '/repos/acme/app/pulls/7/files'), true);
   assert.equal(state.requests.some((req) => req.method === 'PATCH' || String(req.path).includes('merge')), false);
+});
+
+test('typescript and rust tools run in the checked out tree', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  const checkouts = [];
+  const runs = [];
+  const checkout = async (input) => {
+    checkouts.push({ ...input });
+    writeFileSync(join(input.dir, 'marker'), 'tree');
+    return true;
+  };
+  const ts = (path, name) => ({
+    path,
+    content: `export function ${name}() {\n  return 1;\n}\n`,
+    patch: `@@ -0,0 +1,3 @@\n+export function ${name}() {\n+  return 1;\n+}\n`,
+  });
+  await enqueue();
+  await runOnce(db.pool, {
+    githubApi: stubUrl,
+    files: [ts('a.ts', 'first'), ts('b.ts', 'second')],
+    checkout,
+    available: (tool, ctx) => tool === 'eslint' && existsSync(join(ctx.repoDir, 'marker')),
+    run: async (tool, ctx) => {
+      runs.push({ tool, file: ctx.file, repoDir: ctx.repoDir });
+      if (ctx.file === 'a.ts') return { ran: true, stdout: '[]' };
+      return { ran: true, stdout: '[{"filePath":"/repo/b.ts","messages":[{"ruleId":"no-unused-vars","severity":2,"message":"x","line":2}]}]' };
+    },
+  });
+  assert.equal(checkouts.length, 1);
+  assert.equal(checkouts[0].owner, 'acme');
+  assert.equal(checkouts[0].name, 'app');
+  assert.equal(checkouts[0].sha, SHA);
+  assert.equal(checkouts[0].token, 'ghs_test');
+  assert.deepEqual(runs.map((item) => `${item.tool}:${item.file}`), ['eslint:a.ts', 'eslint:b.ts']);
+  assert.equal(runs[0].repoDir, checkouts[0].dir);
+  assert.equal(runs[1].repoDir, checkouts[0].dir);
+  const posts = state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments'));
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.body, /`b.ts:2` `no-unused-vars`/);
+
+  await db.reset();
+  state.requests.length = 0;
+  checkouts.length = 0;
+  await enqueue();
+  await runOnce(db.pool, {
+    githubApi: stubUrl,
+    files: [ts('web/app.ts', 'total')],
+    checkout,
+    available: (tool, ctx) => tool === 'tsc' && ctx.repoDir === checkouts[0]?.dir,
+    run: async (tool, ctx) => {
+      assert.equal(tool, 'tsc');
+      assert.equal(ctx.repoDir, checkouts[0].dir);
+      return { ran: true, stdout: 'web/app.ts(2,3): error TS2322: bad\n' };
+    },
+  });
+  assert.equal(checkouts.length, 1);
+  assert.match(state.requests.find((req) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`web\/app.ts:2` `TS2322`/);
+
+  await db.reset();
+  state.requests.length = 0;
+  checkouts.length = 0;
+  const rust = {
+    path: 'src/lib.rs',
+    content: 'fn demo() {\n  let x = 1;\n}\n',
+    patch: '@@ -0,0 +1,3 @@\n+fn demo() {\n+  let x = 1;\n+}\n',
+  };
+  await enqueue();
+  await runOnce(db.pool, {
+    githubApi: stubUrl,
+    files: [rust],
+    checkout,
+    available: (tool, ctx) => tool === 'cargo-deny' && ctx.repoDir === checkouts.at(-1)?.dir,
+    run: async (tool, ctx) => {
+      assert.equal(tool, 'cargo-deny');
+      assert.equal(ctx.repoDir, checkouts[0].dir);
+      return { ran: true, stdout: '{"type":"diagnostic","fields":{"code":"A007","severity":"warning","message":"advisory","labels":[{"line":2,"path":"src/lib.rs"}]}}\n' };
+    },
+  });
+  assert.equal(checkouts.length, 1);
+  assert.match(state.requests.find((req) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`src\/lib.rs:2` `A007`/);
+});
+
+test('solidity stays on one file and dry run does not check out', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  let calls = 0;
+  await enqueue();
+  await runOnce(db.pool, { ...reviewOpts(), checkout: async () => { calls += 1; return true; } });
+  assert.equal(calls, 0);
+  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments')).length, 1);
+
+  await db.reset();
+  state.requests.length = 0;
+  process.env.LOGS_WATCHER_DRY_RUN = 'true';
+  await enqueue();
+  await runOnce(db.pool, {
+    githubApi: stubUrl,
+    files: [{ path: 'a.ts', content: 'export function first() {\n  return 1;\n}\n', patch: '@@ -0,0 +1,3 @@\n+export function first() {\n+  return 1;\n+}\n' }],
+    checkout: async () => { calls += 1; return true; },
+    available: () => true,
+    run: async () => ({ ran: true, stdout: '[]' }),
+  });
+  assert.equal(calls, 0);
+  assert.equal(state.requests.length, 0);
 });
 
 test('another language runs no linter and publishes nothing', async () => {

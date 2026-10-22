@@ -405,6 +405,7 @@ async function reviewPull(pool, job, opts) {
     available: opts.available,
     run: opts.run,
     repoDir: opts.repoDir,
+    checkout: opts.checkout,
   });
   if (result.finding) {
     await pool.query(`UPDATE jobs SET payload = payload || $2::jsonb WHERE id = $1`, [job.id, JSON.stringify({ finding: result.finding })]);
