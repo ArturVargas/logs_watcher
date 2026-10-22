@@ -1,4 +1,4 @@
-function tag(event, key) {
+export function tag(event, key) {
   if (Array.isArray(event.tags)) {
     const hit = event.tags.find((item) => item?.key === key);
     return hit ? hit.value : undefined;

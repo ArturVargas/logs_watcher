@@ -2,6 +2,7 @@ import { rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { llmConfig, loadConfig, nextUtcMidnight } from './config.js';
 import { applyQuotes, classify, classifyBooleans, eligible, issueCounts, normalizeEvent } from './classify.js';
+import { fileSentryIssue } from './issues.js';
 import { pathDenied, reviewFix, seedRepo } from './propose.js';
 import { addCost, claimJob, finishJob, log, spentUsd } from './queue.js';
 import { scrub } from './scrub.js';
@@ -115,7 +116,6 @@ async function saveGroup(pool, target, sentryIssueId, fields) {
        latest_event_id = EXCLUDED.latest_event_id,
        class = EXCLUDED.class,
        priority = EXCLUDED.priority,
-       github_issue_number = NULL,
        importance = NULL,
        urgency = NULL,
        updated_at = now()`,
@@ -215,10 +215,10 @@ async function propose(pool, job, target, llm, limits, fields, repoDir) {
     if (review.ok) {
       const inserted = await pool.query(
         `INSERT INTO proposals (id, target_id, kind, generation_key, state, sentry_issue_id, github_issue_number, github_pr_number, base_sha, head_sha, target_hash, payload, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1, 'fix', $2, 'pending', $3, NULL, NULL, $4, NULL, $5, $6::jsonb, now(), now())
+         VALUES (gen_random_uuid(), $1, 'fix', $2, 'pending', $3, $7, NULL, $4, NULL, $5, $6::jsonb, now(), now())
          ON CONFLICT (generation_key) DO NOTHING
          RETURNING id`,
-        [target.id, review.generationKey, fields.sentryIssueId, review.baseSha, review.targetHash, JSON.stringify(review.payload)],
+        [target.id, review.generationKey, fields.sentryIssueId, review.baseSha, review.targetHash, JSON.stringify(review.payload), fields.githubIssueNumber ?? null],
       );
       if (inserted.rows[0]) {
         log({ msg: 'proposal_stored', jobId: job.id, kind: job.kind, proposalId: inserted.rows[0].id, sentryIssueId: fields.sentryIssueId });
@@ -345,6 +345,28 @@ async function classifyAndFile(pool, job, opts) {
     class: outcome.class,
     priority: outcome.priority,
   });
+  const filed = await fileSentryIssue(pool, {
+    job,
+    target,
+    sentryIssueId: payload.sentryIssueId,
+    event: verdict.event,
+    eventText,
+    severity: outcome.class,
+    priority: outcome.priority,
+    counts,
+    eventCountTotal: issue.count ?? null,
+    permalink: typeof issue.permalink === 'string' ? issue.permalink : '',
+    api: opts.githubApi,
+  });
+  if (filed.retry) {
+    await retryLater(pool, job, filed.status, filed.retryAfter);
+    return;
+  }
+  if (filed.dead) {
+    await finishJob(pool, job.id, 'dead', { lastError: `http_${filed.status}` });
+    log({ level: 'error', msg: 'job_dead', jobId: job.id, kind: job.kind, sentryIssueId: payload.sentryIssueId });
+    return;
+  }
   if (!eligible(outcome.class) || !llm.configured) {
     await complete(pool, job, target.id, payload.sentryIssueId);
     return;
@@ -360,6 +382,7 @@ async function classifyAndFile(pool, job, opts) {
     eventText,
     eventId: verdict.event.event_id,
     sentryIssueId: payload.sentryIssueId,
+    githubIssueNumber: filed.number ?? null,
   }, opts.repoDir ?? null);
 }
 
