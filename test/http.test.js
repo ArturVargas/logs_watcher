@@ -194,3 +194,54 @@ test('there is no log-drain route', async () => {
   const res = await post('/webhooks/logs/primary/railway', '{}', {});
   assert.equal(res.status, 404);
 });
+
+function githubEvent(body, delivery, event = 'pull_request') {
+  const raw = JSON.stringify(body);
+  return post('/webhooks/github', raw, {
+    'content-type': 'application/json',
+    'x-hub-signature-256': `sha256=${sign(raw, 'github-secret')}`,
+    'x-github-delivery': delivery,
+    'x-github-event': event,
+  });
+}
+
+function pull(action, sha, repository = { name: 'app', owner: { login: 'acme' } }) {
+  return { action, pull_request: { number: 7, head: { sha } }, repository };
+}
+
+test('opened, synchronize, and reopened each enqueue one review job', async () => {
+  const events = [
+    ['opened', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'pr-open'],
+    ['synchronize', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'pr-sync'],
+    ['reopened', 'cccccccccccccccccccccccccccccccccccccccc', 'pr-reopen'],
+  ];
+  for (const [action, sha, delivery] of events) {
+    assert.equal((await githubEvent(pull(action, sha), delivery)).status, 200);
+  }
+  const jobs = await db.pool.query(`SELECT kind, dedupe_key FROM jobs ORDER BY dedupe_key`);
+  assert.deepEqual(jobs.rows.map((row) => row.kind), ['review_pr', 'review_pr', 'review_pr']);
+  assert.equal(new Set(jobs.rows.map((row) => row.dedupe_key)).size, 3);
+});
+
+test('a repeated pull request sha stores two deliveries and one job', async () => {
+  const sha = 'dddddddddddddddddddddddddddddddddddddddd';
+  assert.equal((await githubEvent(pull('opened', sha), 'pr-same-1')).status, 200);
+  assert.equal((await githubEvent(pull('synchronize', sha), 'pr-same-2')).status, 200);
+  const inbox = await db.pool.query('SELECT count(*)::int AS n FROM inbox');
+  const jobs = await db.pool.query('SELECT count(*)::int AS n FROM jobs');
+  assert.equal(inbox.rows[0].n, 2);
+  assert.equal(jobs.rows[0].n, 1);
+});
+
+test('other github events and unknown repositories enqueue nothing', async () => {
+  const sha = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+  assert.equal((await githubEvent(pull('closed', sha), 'pr-closed')).status, 200);
+  assert.equal((await githubEvent(pull('ready_for_review', sha), 'pr-ready')).status, 200);
+  assert.equal((await githubEvent(pull('opened', 'abc123'), 'pr-short')).status, 200);
+  assert.equal((await githubEvent({ action: 'created', repository: { name: 'app', owner: { login: 'acme' } } }, 'issue-1', 'issue_comment')).status, 200);
+  assert.equal((await githubEvent(pull('opened', sha, { name: 'other', owner: { login: 'acme' } }), 'pr-other')).status, 200);
+  const jobs = await db.pool.query('SELECT count(*)::int AS n FROM jobs');
+  const inbox = await db.pool.query('SELECT count(*)::int AS n FROM inbox');
+  assert.equal(jobs.rows[0].n, 0);
+  assert.equal(inbox.rows[0].n, 5);
+});
