@@ -309,10 +309,10 @@ test('a change over the line cap stores nothing pending', async () => {
   assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
 });
 
-test('src does not call github, typesafe, or a log drain', () => {
+test('src does not call typesafe, pulls, or a log drain', () => {
   const files = readdirSync('src').filter((name) => name.endsWith('.js'));
   const text = files.map((name) => readFileSync(join('src', name), 'utf8')).join('\n');
-  assert.equal(text.includes('api.github.com'), false);
   assert.equal(text.includes('api.typesafe.ai'), false);
+  assert.equal(text.includes('/pulls'), false);
   assert.equal(text.includes('webhooks/logs'), false);
 });
