@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { llmConfig, loadConfig, nextUtcMidnight } from './config.js';
 import { applyQuotes, classify, classifyBooleans, eligible, issueCounts, normalizeEvent } from './classify.js';
 import { fileSentryIssue } from './issues.js';
+import { reviewPullRequest } from './review.js';
 import { pathDenied, reviewFix, seedRepo } from './propose.js';
 import { addCost, claimJob, finishJob, log, spentUsd } from './queue.js';
 import { scrub } from './scrub.js';
@@ -386,11 +387,52 @@ async function classifyAndFile(pool, job, opts) {
   }, opts.repoDir ?? null);
 }
 
+async function reviewPull(pool, job, opts) {
+  const payload = job.payload ?? {};
+  const target = loadConfig().targets.find((item) => item.id === payload.targetId);
+  const sha = String(payload.sha ?? '');
+  if (!target?.active || !Number.isInteger(payload.number) || !/^[0-9a-f]{40}$/.test(sha)) {
+    log({ msg: 'config_missing', jobId: job.id, kind: job.kind, pr: payload.number });
+    await finishJob(pool, job.id, 'done', { lastError: 'config_missing' });
+    return;
+  }
+  const result = await reviewPullRequest({
+    target,
+    number: payload.number,
+    sha,
+    files: opts.files,
+    githubApi: opts.githubApi,
+    available: opts.available,
+    run: opts.run,
+    repoDir: opts.repoDir,
+  });
+  if (result.finding) {
+    await pool.query(`UPDATE jobs SET payload = payload || $2::jsonb WHERE id = $1`, [job.id, JSON.stringify({ finding: result.finding })]);
+  }
+  if (result.retry) {
+    await retryLater(pool, job, result.status, result.retryAfter);
+    return;
+  }
+  if (result.dead) {
+    await finishJob(pool, job.id, 'dead', { lastError: `http_${result.status}` });
+    log({ level: 'error', msg: 'job_dead', jobId: job.id, kind: job.kind, pr: payload.number });
+    return;
+  }
+  if (result.missing) {
+    log({ msg: 'config_missing', jobId: job.id, kind: job.kind, pr: payload.number });
+    await finishJob(pool, job.id, 'done', { lastError: 'config_missing' });
+    return;
+  }
+  if (result.published) log({ msg: 'review_comment', jobId: job.id, kind: job.kind, pr: payload.number });
+  await finishJob(pool, job.id, 'done');
+}
+
 export async function runOnce(pool, opts = {}) {
   const job = await claimJob(pool);
   if (!job) return false;
   try {
     if (job.kind === 'classify_and_file') await classifyAndFile(pool, job, opts);
+    else if (job.kind === 'review_pr') await reviewPull(pool, job, opts);
     else await finishJob(pool, job.id, 'done');
   } catch {
     await finishJob(pool, job.id, 'dead', { lastError: 'job_dead' });

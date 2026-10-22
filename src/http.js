@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
-import { enqueueClassify, log, withTx } from './queue.js';
+import { enqueueClassify, enqueueReview, log, withTx } from './queue.js';
 import { scrubJson } from './scrub.js';
 
 const MAX_BODY = 1_000_000;
@@ -150,7 +150,7 @@ async function handleSentry(req, res, pool, targetId, raw) {
 }
 
 async function handleGithub(req, res, pool, raw) {
-  // shortcut: la entrega queda en inbox y este corte no encola; reabrir cuando exista el consumidor.
+  // shortcut: only pull_request opened, synchronize, and reopened enqueue; other GitHub events stay in the inbox until they have a consumer.
   const secret = process.env.GITHUB_WEBHOOK_SECRET || '';
   const signature = header(req, 'x-hub-signature-256');
   const expected = `sha256=${hmacHex(secret, raw)}`;
@@ -174,6 +174,15 @@ async function handleGithub(req, res, pool, raw) {
   const owner = body?.repository?.owner?.login ?? '';
   const name = body?.repository?.name ?? '';
   const target = config.targets.find((item) => item.active && item.github.owner === owner && item.github.name === name);
+  const action = body?.action;
+  const number = Number(body?.pull_request?.number);
+  const sha = String(body?.pull_request?.head?.sha ?? '').toLowerCase();
+  const review = header(req, 'x-github-event') === 'pull_request'
+    && (action === 'opened' || action === 'synchronize' || action === 'reopened')
+    && target
+    && Number.isInteger(number)
+    && number > 0
+    && /^[0-9a-f]{40}$/.test(sha);
   try {
     await withTx(pool, async (client) => {
       await storeInbox(client, {
@@ -184,6 +193,7 @@ async function handleGithub(req, res, pool, raw) {
         status: 'stored',
         dropReason: null,
       });
+      if (review) await enqueueReview(client, { target, deliveryId: delivery, number, sha });
     });
   } catch (err) {
     if (err.code === '23505') {

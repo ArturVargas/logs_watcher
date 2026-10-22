@@ -288,6 +288,33 @@ function appJwt(appId, privateKey) {
   return `${data}.${sign.sign(privateKey).toString('base64url')}`;
 }
 
+export async function openGithub(target, apiBase) {
+  if (!target?.active) return { missing: true };
+  const installationId = target.github.installationId || process.env.GITHUB_INSTALLATION_ID || '';
+  const appId = process.env.GITHUB_APP_ID || '';
+  if (!installationId || !appId) return { missing: true };
+  let privateKey;
+  try {
+    privateKey = readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH || KEY_PATH, 'utf8');
+  } catch {
+    return { missing: true };
+  }
+  let token;
+  try {
+    token = appJwt(appId, privateKey);
+  } catch {
+    return { missing: true };
+  }
+  const api = (apiBase || GITHUB_API).replace(/\/$/, '');
+  const minted = await gh(api, token, 'POST', `/app/installations/${encodeURIComponent(installationId)}/access_tokens`);
+  const mintedFailure = failure(minted);
+  if (mintedFailure) return mintedFailure;
+  let mintedBody;
+  try { mintedBody = JSON.parse(minted.text); } catch { return { dead: true, status: minted.status }; }
+  if (!mintedBody.token) return { dead: true, status: minted.status };
+  return { call: (method, path, payload) => gh(api, mintedBody.token, method, path, payload) };
+}
+
 async function remember(pool, targetId, sentryIssueId, number, language, stale) {
   await pool.query(
     `UPDATE groups SET github_issue_number = $3, issue_language = $4, progress_stale = $5, updated_at = now()
@@ -310,30 +337,10 @@ function missing(job, sentryIssueId) {
 export async function fileSentryIssue(pool, input) {
   if (dryRun()) return { number: null };
   const { job, target, sentryIssueId } = input;
-  if (!target.active) return missing(job, sentryIssueId);
-  const installationId = target.github.installationId || process.env.GITHUB_INSTALLATION_ID || '';
-  const appId = process.env.GITHUB_APP_ID || '';
-  if (!installationId || !appId) return missing(job, sentryIssueId);
-  let privateKey;
-  try {
-    privateKey = readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH || KEY_PATH, 'utf8');
-  } catch {
-    return missing(job, sentryIssueId);
-  }
-  const api = (input.api || GITHUB_API).replace(/\/$/, '');
-  let token;
-  try {
-    token = appJwt(appId, privateKey);
-  } catch {
-    return missing(job, sentryIssueId);
-  }
-  const minted = await gh(api, token, 'POST', `/app/installations/${encodeURIComponent(installationId)}/access_tokens`);
-  const mintedFailure = failure(minted);
-  if (mintedFailure) return mintedFailure;
-  let mintedBody;
-  try { mintedBody = JSON.parse(minted.text); } catch { return { dead: true, status: minted.status }; }
-  if (!mintedBody.token) return { dead: true, status: minted.status };
-  const call = (method, path, payload) => gh(api, mintedBody.token, method, path, payload);
+  const session = await openGithub(target, input.api);
+  if (session.missing) return missing(job, sentryIssueId);
+  if (session.retry || session.dead) return session;
+  const call = session.call;
   const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
   const row = (await pool.query(
     `SELECT github_issue_number, issue_language FROM groups WHERE target_id = $1 AND sentry_issue_id = $2`,

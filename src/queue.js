@@ -76,6 +76,16 @@ export function dedupeKey(targetId, sentryIssueId) {
   return `classify:${targetId}:${sentryIssueId}`;
 }
 
+export async function enqueueReview(client, { target, deliveryId, number, sha }) {
+  const payload = { targetId: target.id, deliveryId, number, sha };
+  await client.query(
+    `INSERT INTO jobs (id, kind, dedupe_key, state, run_after, payload)
+     VALUES (gen_random_uuid(), 'review_pr', $1, 'queued', now(), $2::jsonb)
+     ON CONFLICT (dedupe_key) DO NOTHING`,
+    [`review:${target.id}:${number}:${sha}`, JSON.stringify(payload)],
+  );
+}
+
 export async function enqueueClassify(client, { target, sentryIssueId, deliveryId }) {
   await client.query(
     `INSERT INTO groups (target_id, sentry_issue_id, issue_language, updated_at)
