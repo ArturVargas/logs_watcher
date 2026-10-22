@@ -312,7 +312,8 @@ export async function openGithub(target, apiBase) {
   let mintedBody;
   try { mintedBody = JSON.parse(minted.text); } catch { return { dead: true, status: minted.status }; }
   if (!mintedBody.token) return { dead: true, status: minted.status };
-  return { call: (method, path, payload) => gh(api, mintedBody.token, method, path, payload) };
+  const accessToken = mintedBody.token;
+  return { token: accessToken, call: (method, path, payload) => gh(api, accessToken, method, path, payload) };
 }
 
 async function remember(pool, targetId, sentryIssueId, number, language, stale) {
