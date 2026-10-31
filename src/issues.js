@@ -272,7 +272,7 @@ async function gh(api, token, method, path, payload) {
   }
 }
 
-function failure(res) {
+export function failure(res) {
   if (res.status === 429 || res.status >= 500) return { retry: true, status: res.status, retryAfter: res.retryAfter };
   if (res.status >= 400) return { dead: true, status: res.status };
   return null;

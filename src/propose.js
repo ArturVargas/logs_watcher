@@ -142,6 +142,8 @@ function git(cwd, args) {
   });
 }
 
+const SECRET_ENV = ['DATABASE_URL', 'LLM_API_KEY', 'SENTRY_AUTH_TOKEN', 'SENTRY_WEBHOOK_SECRET', 'GITHUB_WEBHOOK_SECRET', 'GITHUB_APP_PRIVATE_KEY_PATH', 'POSTHOG_API_KEY'];
+
 function inside(root, filePath) {
   const full = resolve(root, filePath);
   const base = resolve(root);
@@ -184,6 +186,35 @@ export function seedRepo(patches) {
   git(dir, ['add', '-A']);
   git(dir, ['commit', '--allow-empty', '-m', 'seed']);
   return dir;
+}
+
+// shortcut: testCommand runs in the job repo or the seeded patch tree, not a full target mirror; a command that needs the rest of the repo fails closed.
+export function testsPass(repoDir, payload, command) {
+  if (command == null) return true;
+  if (!repoDir || !Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string')) return false;
+  const dir = mkdtempSync(join(tmpdir(), 'lw-test-'));
+  try {
+    if (spawnSync('cp', ['-a', `${repoDir}/.`, dir]).status !== 0) return false;
+    for (const patch of payload?.patches ?? []) {
+      if (!patch || pathDenied(patch.path) || !inside(dir, patch.path)) return false;
+      const full = join(dir, patch.path);
+      const original = existsSync(full) ? readFileSync(full, 'utf8') : '';
+      const at = original.indexOf(patch.before);
+      if (at < 0 || original.indexOf(patch.before, at + patch.before.length) !== -1) return false;
+      writeFileSync(full, original.slice(0, at) + patch.after + original.slice(at + patch.before.length));
+    }
+    for (const file of payload?.newTests ?? []) {
+      if (!file || pathDenied(file.path) || typeof file.content !== 'string' || !inside(dir, file.path)) return false;
+      const full = join(dir, file.path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, file.content);
+    }
+    const env = { ...process.env };
+    for (const key of SECRET_ENV) delete env[key];
+    return spawnSync(command[0], command.slice(1), { cwd: dir, env, timeout: 600_000, stdio: 'ignore' }).status === 0;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function applyCheck(repoDir, diffText) {

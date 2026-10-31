@@ -1,10 +1,11 @@
 import { rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import { llmConfig, loadConfig, nextUtcMidnight } from './config.js';
+import { dryRun, llmConfig, loadConfig, nextUtcMidnight } from './config.js';
 import { applyQuotes, classify, classifyBooleans, eligible, issueCounts, normalizeEvent } from './classify.js';
 import { fileSentryIssue } from './issues.js';
 import { reviewPullRequest } from './review.js';
-import { pathDenied, reviewFix, seedRepo } from './propose.js';
+import { pathDenied, reviewFix, seedRepo, testsPass } from './propose.js';
+import { openFixPull } from './pulls.js';
 import { addCost, claimJob, finishJob, log, spentUsd } from './queue.js';
 import { scrub } from './scrub.js';
 
@@ -170,8 +171,8 @@ function prompt(eventText, files, limit, errors) {
   return body;
 }
 
-// shortcut: testCommand and the test-layout rule are not checked in this slice; enforce them when a fix opens a pull request.
-async function propose(pool, job, target, llm, limits, fields, repoDir) {
+// shortcut: docs drift does not run before the pull; the body says there is no docs impact until that pass exists.
+async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
   const files = snippets(fields.event, repoDir);
   let errors = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -197,6 +198,7 @@ async function propose(pool, job, target, llm, limits, fields, repoDir) {
       cleanup = () => rmSync(repo, { recursive: true, force: true });
     }
     let review;
+    let testsOk = true;
     try {
       review = reviewFix({
         targetId: target.id,
@@ -210,6 +212,7 @@ async function propose(pool, job, target, llm, limits, fields, repoDir) {
         priority: fields.priority,
         files,
       });
+      if (review.ok && !dryRun()) testsOk = testsPass(repo, review.payload, target.testCommand);
     } finally {
       if (cleanup) cleanup();
     }
@@ -218,11 +221,42 @@ async function propose(pool, job, target, llm, limits, fields, repoDir) {
         `INSERT INTO proposals (id, target_id, kind, generation_key, state, sentry_issue_id, github_issue_number, github_pr_number, base_sha, head_sha, target_hash, payload, created_at, updated_at)
          VALUES (gen_random_uuid(), $1, 'fix', $2, 'pending', $3, $7, NULL, $4, NULL, $5, $6::jsonb, now(), now())
          ON CONFLICT (generation_key) DO NOTHING
-         RETURNING id`,
+         RETURNING id, github_pr_number`,
         [target.id, review.generationKey, fields.sentryIssueId, review.baseSha, review.targetHash, JSON.stringify(review.payload), fields.githubIssueNumber ?? null],
       );
-      if (inserted.rows[0]) {
-        log({ msg: 'proposal_stored', jobId: job.id, kind: job.kind, proposalId: inserted.rows[0].id, sentryIssueId: fields.sentryIssueId });
+      let proposal = inserted.rows[0];
+      if (proposal) {
+        log({ msg: 'proposal_stored', jobId: job.id, kind: job.kind, proposalId: proposal.id, sentryIssueId: fields.sentryIssueId });
+      } else {
+        proposal = (await pool.query(
+          `SELECT id, github_pr_number FROM proposals WHERE generation_key = $1`,
+          [review.generationKey],
+        )).rows[0];
+      }
+      if (!testsOk) {
+        log({ msg: 'tests_failed', jobId: job.id, kind: job.kind, sentryIssueId: fields.sentryIssueId });
+      } else if (!dryRun() && proposal) {
+        const opened = await openFixPull(pool, {
+          job,
+          target,
+          proposalId: proposal.id,
+          prNumber: proposal.github_pr_number,
+          payload: review.payload,
+          generationKey: review.generationKey,
+          sentryIssueId: fields.sentryIssueId,
+          eventId: fields.eventId,
+          githubIssueNumber: fields.githubIssueNumber ?? null,
+          api,
+        });
+        if (opened.retry) {
+          await retryLater(pool, job, opened.status, opened.retryAfter);
+          return;
+        }
+        if (opened.dead) {
+          await finishJob(pool, job.id, 'dead', { lastError: `http_${opened.status}` });
+          log({ level: 'error', msg: 'job_dead', jobId: job.id, kind: job.kind, sentryIssueId: fields.sentryIssueId });
+          return;
+        }
       }
       await complete(pool, job, target.id, fields.sentryIssueId);
       return;
@@ -384,7 +418,7 @@ async function classifyAndFile(pool, job, opts) {
     eventId: verdict.event.event_id,
     sentryIssueId: payload.sentryIssueId,
     githubIssueNumber: filed.number ?? null,
-  }, opts.repoDir ?? null);
+  }, opts.repoDir ?? null, opts.githubApi);
 }
 
 async function reviewPull(pool, job, opts) {

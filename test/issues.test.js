@@ -12,7 +12,14 @@ import { listen, openTestDb } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-issue-'));
 const repos = [];
-const state = { requests: [], issues: new Map(), next: 1, sentryIssue: null, event: null, model: null };
+const SOURCE = 'export function total() {\n  return 1;\n}\n';
+const BASE = 'a'.repeat(40);
+const TREE = 'c'.repeat(40);
+const HEAD = 'b'.repeat(40);
+const state = {
+  requests: [], issues: new Map(), next: 1, sentryIssue: null, event: null, model: null,
+  pulls: [], files: {}, branches: new Set(), blobs: [], trees: [], commits: [], labelNames: new Set(),
+};
 let db;
 let stub;
 let stubUrl;
@@ -27,7 +34,7 @@ function makeRepo() {
   const repo = mkdtempSync(join(tmpdir(), 'lw-repo-'));
   const full = join(repo, 'src/orders.js');
   mkdirSync(dirname(full), { recursive: true });
-  writeFileSync(full, 'export function total() {\n  return 1;\n}\n');
+  writeFileSync(full, SOURCE);
   git(repo, ['init', '-b', 'main']);
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-m', 'init']);
@@ -41,7 +48,30 @@ function send(res, status, payload) {
   res.end(body);
 }
 
-function writeConfig({ installationId = '77', issueLanguage = 'both' } = {}) {
+function resetGithub() {
+  state.requests.length = 0;
+  state.issues.clear();
+  state.labelNames = new Set();
+  state.next = 1;
+  state.blobs = [];
+  state.trees = [];
+  state.commits = [];
+  state.branches = new Set();
+  state.pulls = [];
+  state.files = { 'src/orders.js': SOURCE };
+  state.truncatedTree = false;
+}
+
+function bucket(number) {
+  const issue = state.issues.get(number);
+  if (issue) return issue;
+  const pull = state.pulls.find((item) => item.number === number);
+  if (!pull) return null;
+  pull.labels ??= [];
+  return pull;
+}
+
+function writeConfig({ installationId = '77', issueLanguage = 'both', testCommand = null } = {}) {
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({
     targets: [{
@@ -55,6 +85,7 @@ function writeConfig({ installationId = '77', issueLanguage = 'both' } = {}) {
         blockerTransactions: ['/', '/login', '/signup', '/auth/callback'],
       },
       issueLanguage,
+      testCommand,
     }],
   }));
   process.env.LOGS_WATCHER_CONFIG = file;
@@ -182,7 +213,7 @@ before(async () => {
       }
       const labels = url.pathname.match(/^\/repos\/acme\/app\/issues\/(\d+)\/labels(?:\/(.+))?$/);
       if (labels) {
-        const issue = state.issues.get(Number(labels[1]));
+        const issue = bucket(Number(labels[1]));
         if (!issue) return send(res, 404, {});
         if (req.method === 'POST') {
           for (const name of body.labels ?? []) {
@@ -205,6 +236,73 @@ before(async () => {
           return send(res, 200, issue);
         }
         return send(res, 200, issue);
+      }
+      if (req.method === 'GET' && url.pathname === '/repos/acme/app') return send(res, 200, { default_branch: 'main' });
+      const gitRef = url.pathname.match(/^\/repos\/acme\/app\/git\/ref\/heads\/(.+)$/);
+      if (gitRef && req.method === 'GET') {
+        const name = decodeURIComponent(gitRef[1]);
+        if (name === 'main') return send(res, 200, { object: { sha: BASE } });
+        if (state.branches.has(name)) return send(res, 200, { object: { sha: HEAD } });
+        return send(res, 404, {});
+      }
+      if (req.method === 'GET' && url.pathname === `/repos/acme/app/git/commits/${BASE}`) {
+        return send(res, 200, { sha: BASE, tree: { sha: TREE } });
+      }
+      if (req.method === 'GET' && url.pathname === `/repos/acme/app/git/trees/${TREE}`) {
+        return send(res, 200, {
+          sha: TREE,
+          truncated: Boolean(state.truncatedTree),
+          tree: Object.keys(state.files).map((path) => ({ path, type: 'blob', mode: '100644' })),
+        });
+      }
+      const contents = url.pathname.match(/^\/repos\/acme\/app\/contents\/(.+)$/);
+      if (contents && req.method === 'GET') {
+        const path = contents[1].split('/').map(decodeURIComponent).join('/');
+        const text = state.files[path];
+        if (text == null) return send(res, 404, {});
+        return send(res, 200, { type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') });
+      }
+      if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/blobs') {
+        state.blobs.push(body);
+        return send(res, 201, { sha: 'd'.repeat(40) });
+      }
+      if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/trees') {
+        state.trees.push(body);
+        return send(res, 201, { sha: 'e'.repeat(40) });
+      }
+      if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/commits') {
+        state.commits.push(body);
+        return send(res, 201, { sha: HEAD });
+      }
+      if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/refs') {
+        const name = String(body.ref || '').replace(/^refs\/heads\//, '');
+        if (state.branches.has(name)) return send(res, 422, { message: 'Reference already exists' });
+        state.branches.add(name);
+        return send(res, 201, { ref: body.ref, object: { sha: body.sha } });
+      }
+      if (url.pathname === '/repos/acme/app/pulls') {
+        if (req.method === 'GET') {
+          const head = url.searchParams.get('head');
+          const items = state.pulls.filter((item) => !head || head === `acme:${item.head}`);
+          return send(res, 200, items.map((item) => ({ ...item, head: { ref: item.head } })));
+        }
+        if (req.method === 'POST') {
+          if (body.draft || body.merge_method || body.auto_merge != null) return send(res, 422, { message: 'not a plain pull' });
+          if (state.pulls.some((item) => item.head === body.head)) return send(res, 422, { message: 'A pull request already exists' });
+          const number = state.next;
+          state.next += 1;
+          const pull = {
+            number,
+            title: body.title,
+            body: body.body,
+            head: body.head,
+            base: body.base,
+            html_url: `https://github.com/acme/app/pull/${number}`,
+            labels: [],
+          };
+          state.pulls.push(pull);
+          return send(res, 201, pull);
+        }
       }
       if (req.method === 'POST' && url.pathname === '/repos/acme/app/issues') {
         const number = state.next;
@@ -236,10 +334,7 @@ before(async () => {
 
 beforeEach(async () => {
   await db.reset();
-  state.requests.length = 0;
-  state.issues.clear();
-  state.labelNames = new Set();
-  state.next = 1;
+  resetGithub();
   state.sentryIssue = { id: '42', userCount: 1, count: 10, stats: { '24h': [[0, 3], [1, 4]] } };
   state.event = truncatedEvent();
   state.model = {
@@ -394,6 +489,8 @@ test('a broken owned block is not rewritten', async () => {
 
 test('non-blocking and unclassified issues are filed without a proposal', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
   state.event = truncatedEvent({
     event_id: 'evt-nb',
     request: { url: 'https://app.example/checkout' },
@@ -408,6 +505,7 @@ test('non-blocking and unclassified issues are filed without a proposal', async 
   assert.equal(issue.labels.some((label) => label.name === 'severity:non-blocking'), true);
   assert.match(issue.body, /sin-fix-automatico/);
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
+  assert.equal(state.pulls.length, 0);
 
   await db.reset();
   state.issues.clear();
@@ -429,6 +527,7 @@ test('non-blocking and unclassified issues are filed without a proposal', async 
   assert.equal(unclassified.labels.some((label) => label.name.startsWith('priority:')), false);
   assert.equal(unclassified.labels.some((label) => label.name === 'auto-fix:no'), true);
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
+  assert.equal(state.pulls.length, 0);
 });
 
 test('both picks english and later text does not change it', async () => {
@@ -482,21 +581,229 @@ test('a dry-run proposal keeps a null issue number until the flag is exactly fal
   const group = await db.pool.query('SELECT github_issue_number FROM groups');
   assert.equal(proposal.rowCount, 1);
   assert.equal(proposal.rows[0].github_issue_number, group.rows[0].github_issue_number);
-  assert.equal(proposal.rows[0].github_pr_number, null);
-  assert.equal(state.requests.some((req) => req.path.includes('/pulls')), false);
+  assert.equal(proposal.rows[0].github_pr_number, state.pulls[0].number);
+  assert.equal(state.pulls.length, 1);
 });
 
-test('a stored proposal records the issue number and does not open a pull', async () => {
+test('a stored proposal opens one pull and a second run does not open another', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  const lines = [];
+  const original = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+    state.requests.length = 0;
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  } finally {
+    console.log = original;
+  }
+  const proposal = await db.pool.query('SELECT github_issue_number, github_pr_number, head_sha, generation_key, payload FROM proposals');
+  const group = await db.pool.query('SELECT github_issue_number FROM groups');
+  assert.equal(proposal.rowCount, 1);
+  assert.equal(proposal.rows[0].github_issue_number, group.rows[0].github_issue_number);
+  const pull = state.pulls[0];
+  assert.equal(state.pulls.length, 1);
+  assert.equal(proposal.rows[0].github_pr_number, pull.number);
+  assert.equal(proposal.rows[0].head_sha, HEAD);
+  const hex = proposal.rows[0].generation_key.slice(4, 12);
+  assert.equal(pull.head, `logs-watcher/fix-primary-42-${hex}`);
+  assert.equal(pull.base, 'main');
+  assert.equal(pull.title, 'fix: Return the right total');
+  const row = await db.pool.query('SELECT id FROM proposals');
+  assert.match(pull.body, new RegExp(`<!-- logs-watcher-proposal: ${row.rows[0].id} -->`));
+  assert.match(pull.body, /<!-- logs-watcher-generation: [0-9a-f]{64} -->/);
+  assert.match(pull.body, /## Qué cambia/);
+  assert.match(pull.body, /sin impacto/);
+  assert.match(pull.body, /\/logs-watcher approve/);
+  assert.equal(pull.body.includes('return 2;'), false);
+  assert.equal(pull.body.includes('ghp_'), false);
+  assert.equal(state.blobs[0].content, SOURCE.replace('return 1;', 'return 2;'));
+  assert.equal(state.blobs[0].encoding, 'utf-8');
+  assert.equal(state.trees[0].base_tree, TREE);
+  assert.equal(state.commits[0].parents[0], BASE);
+  assert.match(state.commits[0].message, /Sentry-Issue: 42/);
+  assert.match(state.commits[0].message, /GitHub-Issue: 1/);
+  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
+  assert.equal(state.requests.some((req) => req.path.includes('/merge') || req.body?.merge_method || req.body?.auto_merge != null), false);
+  const issue = [...state.issues.values()][0];
+  assert.match(issue.body, /Estado del fix: propuesta-abierta/);
+  assert.match(issue.body, new RegExp(`https://github.com/acme/app/pull/${pull.number}`));
+  assert.equal(pull.labels.some((label) => label.name === 'tests:missing'), true);
+  assert.match(lines.join('\n'), /pr_opened/);
+  assert.equal(lines.join('\n').includes('return 2;'), false);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+});
+
+test('any dry-run value other than false opens nothing', async () => {
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  for (const flag of [undefined, 'true', 'no', 'False', '']) {
+    await db.reset();
+    resetGithub();
+    if (flag === undefined) delete process.env.LOGS_WATCHER_DRY_RUN;
+    else process.env.LOGS_WATCHER_DRY_RUN = flag;
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+    const rows = await db.pool.query('SELECT github_pr_number, payload FROM proposals');
+    assert.equal(rows.rowCount, 1, String(flag));
+    assert.equal(rows.rows[0].github_pr_number, null, String(flag));
+    assert.equal(rows.rows[0].payload.dryRun, true, String(flag));
+    assert.equal(state.pulls.length, 0, String(flag));
+    assert.equal(state.requests.some((req) => req.path.includes('/pulls') || req.path.includes('/git/')), false, String(flag));
+    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done', String(flag));
+  }
+});
+
+test('blocker, truncated, and flow-blocked each open one pull', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  const cases = [
+    ['blocker', truncatedEvent({
+      event_id: 'evt-b',
+      culprit: '/login',
+      request: { url: 'https://app.example/login' },
+      tags: [{ key: 'transaction', value: '/login' }],
+    }), 'P0'],
+    ['truncated', truncatedEvent(), 'P1'],
+    ['flow-blocked', truncatedEvent({
+      event_id: 'evt-f',
+      culprit: '/checkout',
+      request: { url: 'https://app.example/checkout' },
+      tags: [{ key: 'transaction', value: '/checkout' }],
+      contexts: { response: { status_code: 500 } },
+      exception: {
+        values: [{
+          type: 'TypeError',
+          value: 'orders broke badly',
+          mechanism: { handled: true, type: 'generic' },
+          stacktrace: { frames: [{ filename: 'src/orders.js', function: 'total', lineNo: 2, inApp: true }] },
+        }],
+      },
+    }), 'P2'],
+  ];
+  for (const [severity, event, priority] of cases) {
+    await db.reset();
+    resetGithub();
+    state.event = event;
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+    const group = await db.pool.query('SELECT class, priority FROM groups');
+    assert.equal(group.rows[0].class, severity);
+    assert.equal(group.rows[0].priority, priority);
+    assert.equal(state.pulls.length, 1, severity);
+    assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 1, severity);
+    assert.equal(state.requests.some((req) => req.path.includes('/merge')), false, severity);
+    assert.match(state.pulls[0].body, new RegExp(`Clase: ${severity}`));
+    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done', severity);
+  }
+});
+
+test('a later event keeps the open pull', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   process.env.LLM_API_KEY = 'llm-key';
   process.env.LLM_MODEL = 'qwen-test';
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
-  const proposal = await db.pool.query('SELECT github_issue_number, github_pr_number FROM proposals');
-  const group = await db.pool.query('SELECT github_issue_number FROM groups');
-  assert.equal(proposal.rowCount, 1);
-  assert.equal(proposal.rows[0].github_issue_number, group.rows[0].github_issue_number);
-  assert.equal(proposal.rows[0].github_pr_number, null);
-  assert.equal(state.requests.some((req) => req.path.includes('/pulls')), false);
+  await db.pool.query(`UPDATE proposals SET github_pr_number = NULL`);
+  await db.pool.query(`UPDATE jobs SET state = 'queued', locked_at = NULL, run_after = now()`);
+  state.requests.length = 0;
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 1);
+  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, state.pulls[0].number);
+
+  state.event = truncatedEvent({ event_id: 'evt-2' });
+  state.requests.length = 0;
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  const rows = await db.pool.query('SELECT github_pr_number FROM proposals');
+  assert.equal(rows.rowCount, 2);
+  assert.equal(rows.rows.filter((row) => row.github_pr_number != null).length, 1);
+  assert.equal(state.pulls.length, 1);
+});
+
+test('an english target opens the pull in english', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  writeConfig({ issueLanguage: 'en' });
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.match(state.pulls[0].body, /## What changes/);
+  assert.match(state.pulls[0].body, /no impact/);
+  assert.equal(state.pulls[0].body.includes('Qué cambia'), false);
+  const issue = [...state.issues.values()][0];
+  assert.match(issue.body, /Fix state: propuesta-abierta/);
+});
+
+test('a patch that is not in the GitHub file does not open a pull', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  state.files['src/orders.js'] = 'export function total() {\n  return 9;\n}\n';
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 0);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal(state.branches.size, 0);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+});
+
+test('a repository that already has tests does not open a pull without a new test', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  state.files['src/orders.test.js'] = 'test("total", () => {});\n';
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 0);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal(state.branches.size, 0);
+});
+
+test('a failing test command stores the proposal and does not open a pull', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] });
+  const repo = makeRepo();
+  const lines = [];
+  const original = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  } finally {
+    console.log = original;
+  }
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal(state.pulls.length, 0);
+  assert.match(lines.join('\n'), /tests_failed/);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+});
+
+test('a passing test command opens the pull when the patched tree hides the model key', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  writeConfig({
+    testCommand: [process.execPath, '-e', "const fs=require('fs'); process.exit(fs.readFileSync('src/orders.js','utf8').includes('return 2;') && !process.env.LLM_API_KEY ? 0 : 1)"],
+  });
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 1);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
 });
