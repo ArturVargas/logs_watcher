@@ -1,5 +1,6 @@
 import { eligible } from './classify.js';
 import { dryRun } from './config.js';
+import { changedPaths, docsDiffText, docsKey, docsPrompt, docsStop, planDocs, promptFile, reviewDocs } from './docs.js';
 import { commentFixCode, failure, openGithub } from './issues.js';
 import { pathDenied } from './propose.js';
 import { log } from './queue.js';
@@ -12,7 +13,6 @@ const COPY = {
     evidence: 'Evidencia',
     severity: 'Severidad',
     docs: 'Documentación',
-    docsStatus: 'sin impacto',
     approval: 'Aprobación',
     approvalLine: 'Esta clase exige una persona. La regla general está en la sección Fusión automática.',
     sources: 'Fuentes',
@@ -26,7 +26,6 @@ const COPY = {
     evidence: 'Evidence',
     severity: 'Severity',
     docs: 'Documentation',
-    docsStatus: 'no impact',
     approval: 'Approval',
     approvalLine: 'This class needs a person. The general rule is in the Automatic merge section.',
     sources: 'Sources',
@@ -79,7 +78,12 @@ function sentryUrl(target, id) {
   return scrub(`${target.sentry.baseUrl.replace(/\/$/, '')}/organizations/${target.sentry.org}/issues/${marker}/`);
 }
 
-function pullBody(language, input, hex) {
+const DOCS_STATUS = {
+  es: { none: 'sin impacto', updated: 'actualizada en este PR', pending: 'pendiente' },
+  en: { none: 'no impact', updated: 'updated in this pull request', pending: 'pending' },
+};
+
+function pullBody(language, input, hex, docsStatus) {
   const copy = COPY[language];
   const issue = Number.isInteger(input.githubIssueNumber) ? `\n- Issue: #${input.githubIssueNumber}` : '';
   const priority = input.payload.priority || (language === 'en' ? 'no priority' : 'sin prioridad');
@@ -102,7 +106,7 @@ function pullBody(language, input, hex) {
     '',
     `## ${copy.docs}`,
     '',
-    copy.docsStatus,
+    DOCS_STATUS[language][docsStatus] || DOCS_STATUS[language].none,
     '',
     `## ${copy.approval}`,
     '',
@@ -218,10 +222,10 @@ async function publish(call, repo, { branch, message, baseSha, treeSha, payload 
   const headSha = readJson(commit)?.sha;
   if (!headSha) return { problem: { dead: true, status: commit.status } };
   const ref = await call('POST', `${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: headSha });
-  if (ref.status === 422 || ref.status === 409) return { headSha };
+  if (ref.status === 422 || ref.status === 409) return { headSha, treeSha: nextTree };
   const refProblem = failure(ref);
   if (refProblem) return { problem: refProblem };
-  return { headSha };
+  return { headSha, treeSha: nextTree };
 }
 
 async function listPull(call, repo, owner, branch) {
@@ -271,6 +275,115 @@ async function noteOpen(call, repo, input, language, url) {
   return failure(patched);
 }
 
+async function commitOnto(call, repo, { branch, parentSha, treeSha, files }) {
+  const tree = [];
+  for (const file of files) {
+    const blob = await call('POST', `${repo}/git/blobs`, { content: file.content, encoding: 'utf-8' });
+    const blobProblem = failure(blob);
+    if (blobProblem) return { problem: blobProblem };
+    const sha = readJson(blob)?.sha;
+    if (!sha) return { problem: { dead: true, status: blob.status } };
+    tree.push({ path: file.path, mode: '100644', type: 'blob', sha });
+  }
+  const made = await call('POST', `${repo}/git/trees`, { base_tree: treeSha, tree });
+  const madeProblem = failure(made);
+  if (madeProblem) return { problem: madeProblem };
+  const nextTree = readJson(made)?.sha;
+  if (!nextTree) return { problem: { dead: true, status: made.status } };
+  const commit = await call('POST', `${repo}/git/commits`, { message: 'docs: update\n', tree: nextTree, parents: [parentSha] });
+  const commitProblem = failure(commit);
+  if (commitProblem) return { problem: commitProblem };
+  const headSha = readJson(commit)?.sha;
+  if (!headSha) return { problem: { dead: true, status: commit.status } };
+  const ref = await call('PATCH', `${repo}/git/refs/${refName(branch)}`, { sha: headSha });
+  const refProblem = failure(ref);
+  if (refProblem) return { problem: refProblem };
+  return { headSha };
+}
+
+function traced(input, msg) {
+  log({ msg, jobId: input.job.id, kind: input.job.kind, sentryIssueId: input.sentryIssueId });
+}
+
+async function storePendingDocs(pool, input, headSha, paths, baseSha, model) {
+  let payload = { dryRun: false };
+  try {
+    payload = JSON.parse(scrub(JSON.stringify({
+      dryRun: false,
+      noChange: model?.noChange === true,
+      evidence: model?.evidence ?? [],
+      patches: model?.patches ?? [],
+      newSections: model?.newSections ?? [],
+    })));
+  } catch { /* keep the empty payload */ }
+  await pool.query(
+    `INSERT INTO proposals (id, target_id, kind, generation_key, state, sentry_issue_id, github_issue_number, github_pr_number, base_sha, head_sha, target_hash, payload, created_at, updated_at)
+     VALUES (gen_random_uuid(), $1, 'docs', $2, 'pending', $3, $4, NULL, $5, $6, NULL, $7::jsonb, now(), now())
+     ON CONFLICT (generation_key) DO NOTHING`,
+    [input.target.id, docsKey(input.target.id, input.sentryIssueId, headSha, paths), input.sentryIssueId, input.githubIssueNumber, baseSha, headSha, JSON.stringify(payload)],
+  );
+}
+
+async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, entries, baseSha }) {
+  const paths = changedPaths(input.payload);
+  const early = docsStop(paths);
+  if (early === 'too_large') {
+    traced(input, 'docs_diff_too_large');
+    const commented = await commentFixCode(input.target, input.api, input.githubIssueNumber, 'docs_diff_too_large', call);
+    if (commented) return commented;
+    return { status: 'none' };
+  }
+  if (early === 'markdown') return { status: 'none' };
+  // shortcut: a truncated tree can miss docs candidates; page the tree when a repository exceeds one response.
+  const docPaths = entries.filter((item) => item?.type !== 'tree' && String(item?.path || '').startsWith('docs/')).map((item) => item.path);
+  if (!docPaths.length) return { status: 'none' };
+  const map = await readContents(call, repo, headSha, 'docs/map.yml');
+  if (map.problem) return map.problem;
+  const plan = await planDocs({
+    paths,
+    mapText: map.missing ? null : map.text,
+    docPaths,
+    patches: input.payload.patches,
+    newTests: input.payload.newTests,
+    read: (filePath) => readContents(call, repo, headSha, filePath).then((loaded) => {
+      if (loaded.problem || loaded.missing) return loaded;
+      return { text: loaded.text };
+    }),
+  });
+  if (plan.problem) return plan.problem;
+  if (plan.mapInvalid) traced(input, 'docs_map_invalid');
+  if (plan.stop === 'empty_large') traced(input, 'docs_prefilter_empty_large_corpus');
+  if (plan.stop || !plan.candidates?.length) return { status: 'none' };
+  const key = docsKey(input.target.id, input.sentryIssueId, headSha, paths);
+  const prior = await pool.query(`SELECT state FROM proposals WHERE generation_key = $1`, [key]);
+  if (prior.rowCount) return { status: 'pending' };
+  const files = [];
+  for (const filePath of plan.candidates) {
+    const loaded = await readContents(call, repo, headSha, filePath);
+    if (loaded.problem) return loaded.problem;
+    if (loaded.missing || typeof loaded.text !== 'string') continue;
+    files.push({ path: filePath, ...promptFile(loaded.text) });
+  }
+  const diffText = scrub(docsDiffText(input.payload));
+  const built = docsPrompt(diffText, files, input.promptCap || 80000);
+  if (!built.files.length || typeof input.askDocs !== 'function') return { status: 'none' };
+  const asked = await input.askDocs(built.prompt);
+  if (!asked || asked.deferred || asked.retry || asked.dead) return asked || { status: 'none' };
+  if (!asked.parsed) {
+    await storePendingDocs(pool, input, headSha, paths, baseSha, {});
+    return { status: 'pending' };
+  }
+  const reviewed = reviewDocs(asked.parsed, { files: built.files, diffText });
+  if (reviewed.pending) {
+    await storePendingDocs(pool, input, headSha, paths, baseSha, asked.parsed);
+    return { status: 'pending' };
+  }
+  if (!reviewed.files.length) return { status: 'none' };
+  const committed = await commitOnto(call, repo, { branch, parentSha: headSha, treeSha, files: reviewed.files });
+  if (committed.problem) return committed.problem;
+  return { status: 'updated', headSha: committed.headSha };
+}
+
 async function finish(pool, input, call, repo, pull, headSha, testsMissing, language) {
   const number = pull.number;
   const url = pull.html_url || `https://github.com/${input.target.github.owner}/${input.target.github.name}/pull/${number}`;
@@ -310,7 +423,6 @@ export async function openFixPull(pool, input) {
   const branch = `logs-watcher/fix-${input.target.id}-${input.sentryIssueId}-${hex.slice(0, 8)}`;
   const language = await languageOf(pool, input);
   const { title, message } = commitText(input.payload.summary, input.sentryIssueId, input.githubIssueNumber);
-  const body = pullBody(language, input, hex);
   const base = await baseTree(call, repo);
   if (base.problem) return base.problem;
   if (base.missing) return { number: null };
@@ -330,6 +442,7 @@ export async function openFixPull(pool, input) {
       pull = listed.pull;
     }
     if (!pull) {
+      let treeSha = null;
       if (ref.status === 404) {
         const published = await publish(call, repo, { branch, message, baseSha: base.sha, treeSha: base.treeSha, payload: input.payload });
         if (published.problem) return published.problem;
@@ -339,7 +452,28 @@ export async function openFixPull(pool, input) {
           return { number: null };
         }
         headSha = published.headSha;
+        treeSha = published.treeSha ?? null;
       }
+      let docsStatus = 'none';
+      if (ref.status !== 404 && headSha) {
+        const seen = await call('GET', `${repo}/git/commits/${encodeURIComponent(headSha)}`);
+        if (seen.status !== 404) {
+          const seenProblem = failure(seen);
+          if (seenProblem) return seenProblem;
+          const seenBody = readJson(seen);
+          if (String(seenBody?.message || '').startsWith('docs: update')) docsStatus = 'updated';
+          else treeSha = seenBody?.tree?.sha ?? null;
+        }
+      }
+      if (docsStatus !== 'updated' && treeSha) {
+        const drifted = await driftFix(pool, input, call, repo, {
+          branch, headSha, treeSha, entries: base.entries, baseSha: base.sha,
+        });
+        if (drifted?.deferred || drifted?.retry || drifted?.dead) return drifted;
+        docsStatus = drifted.status;
+        if (drifted.headSha) headSha = drifted.headSha;
+      }
+      const body = pullBody(language, input, hex, docsStatus);
       const created = await createPull(call, repo, { title, branch, base: base.name, body });
       if (created.problem) return created.problem;
       if (created.exists) {

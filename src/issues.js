@@ -453,7 +453,7 @@ async function syncLabels(call, repo, number, issue, names) {
   return null;
 }
 
-const FIX_COMMENT = new Set(['tests_failed', 'fix_does_not_apply']);
+const FIX_COMMENT = new Set(['tests_failed', 'fix_does_not_apply', 'docs_diff_too_large']);
 
 export async function commentFixCode(target, api, issueNumber, code, call) {
   if (dryRun()) return null;

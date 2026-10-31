@@ -315,6 +315,8 @@ test('src does not call typesafe, merge a pull, or a log drain', () => {
   assert.equal(text.includes('api.typesafe.ai'), false);
   assert.equal(text.includes('webhooks/logs'), false);
   assert.equal(text.includes('/merge'), false);
+  assert.equal(text.includes('embedding'), false);
+  assert.equal(text.includes('logs-watcher/docs-'), false);
   assert.equal(text.includes('auto_merge'), false);
   assert.match(text, /\$\{repo\}\/pulls`/);
 });

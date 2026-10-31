@@ -171,7 +171,16 @@ function prompt(eventText, files, limit, errors) {
   return body;
 }
 
-// shortcut: docs drift does not run before the pull; the body says there is no docs impact until that pass exists.
+async function askDocs(pool, llm, limits, user) {
+  if (await overBudget(pool, limits)) return { deferred: true };
+  const result = await chat(llm, limits, FIX_SYSTEM, user);
+  if (result.error === 'retry') return { retry: true, status: result.status, retryAfter: result.retryAfter };
+  if (result.error === 'denied') return { dead: true, status: result.status };
+  await charge(pool, limits, 'docs', result);
+  if (result.error || !result.parsed) return { parsed: null };
+  return { parsed: result.parsed };
+}
+
 async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
   async function say(code) {
     const commented = await commentFixCode(target, api, fields.githubIssueNumber ?? null, code);
@@ -262,7 +271,13 @@ async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
           eventId: fields.eventId,
           githubIssueNumber: fields.githubIssueNumber ?? null,
           api,
+          promptCap: limits.promptCharCap,
+          askDocs: (user) => askDocs(pool, llm, limits, user),
         });
+        if (opened.deferred) {
+          await defer(pool, job, fields.sentryIssueId);
+          return;
+        }
         if (opened.retry) {
           await retryLater(pool, job, opened.status, opened.retryAfter);
           return;
