@@ -31,3 +31,4 @@ Cada ADR conserva una decisión difícil de revertir, las alternativas y la cond
 | [ADR-0025](ADR-0025-parches-con-qwen-cloud.md) | Los parches los escribe Qwen Cloud. |
 | [ADR-0026](ADR-0026-generacion-y-revision-con-ponytail.md) | La generación y la revisión de código usan ponytail. |
 | [ADR-0027](ADR-0027-revision-por-lenguaje.md) | La revisión determinista usa la herramienta del archivo. |
+| [ADR-0028](ADR-0028-especialistas-del-fix.md) | El job de fix orquesta como máximo ocho especialistas. |
