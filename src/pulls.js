@@ -1,6 +1,6 @@
 import { eligible } from './classify.js';
 import { dryRun } from './config.js';
-import { failure, openGithub } from './issues.js';
+import { commentFixCode, failure, openGithub } from './issues.js';
 import { pathDenied } from './propose.js';
 import { log } from './queue.js';
 import { scrub } from './scrub.js';
@@ -333,7 +333,11 @@ export async function openFixPull(pool, input) {
       if (ref.status === 404) {
         const published = await publish(call, repo, { branch, message, baseSha: base.sha, treeSha: base.treeSha, payload: input.payload });
         if (published.problem) return published.problem;
-        if (published.missing) return { number: null };
+        if (published.missing) {
+          const commented = await commentFixCode(input.target, input.api, input.githubIssueNumber, 'fix_does_not_apply', call);
+          if (commented) return commented;
+          return { number: null };
+        }
         headSha = published.headSha;
       }
       const created = await createPull(call, repo, { title, branch, base: base.name, body });

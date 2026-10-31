@@ -453,6 +453,22 @@ async function syncLabels(call, repo, number, issue, names) {
   return null;
 }
 
+const FIX_COMMENT = new Set(['tests_failed', 'fix_does_not_apply']);
+
+export async function commentFixCode(target, api, issueNumber, code, call) {
+  if (dryRun()) return null;
+  if (!FIX_COMMENT.has(code) || !Number.isInteger(issueNumber)) return null;
+  let github = call;
+  if (!github) {
+    const session = await openGithub(target, api);
+    if (session.missing) return null;
+    if (session.retry || session.dead) return session;
+    github = session.call;
+  }
+  const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
+  return commentOnce(github, repo, issueNumber, `logs-watcher-fix: ${code}`, code);
+}
+
 // shortcut: markers are checked in the oldest 100 comments, page when an issue passes that.
 async function commentOnce(call, repo, number, marker, line) {
   const listed = await call('GET', `${repo}/issues/${number}/comments?per_page=100`);

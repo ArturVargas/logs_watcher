@@ -2,7 +2,7 @@ import { rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { dryRun, llmConfig, loadConfig, nextUtcMidnight } from './config.js';
 import { applyQuotes, classify, classifyBooleans, eligible, issueCounts, normalizeEvent } from './classify.js';
-import { fileSentryIssue } from './issues.js';
+import { commentFixCode, fileSentryIssue } from './issues.js';
 import { reviewPullRequest } from './review.js';
 import { pathDenied, reviewFix, seedRepo, testsPass } from './propose.js';
 import { openFixPull } from './pulls.js';
@@ -173,6 +173,20 @@ function prompt(eventText, files, limit, errors) {
 
 // shortcut: docs drift does not run before the pull; the body says there is no docs impact until that pass exists.
 async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
+  async function say(code) {
+    const commented = await commentFixCode(target, api, fields.githubIssueNumber ?? null, code);
+    if (commented?.retry) {
+      await retryLater(pool, job, commented.status, commented.retryAfter);
+      return true;
+    }
+    if (commented?.dead) {
+      await finishJob(pool, job.id, 'dead', { lastError: `http_${commented.status}` });
+      log({ level: 'error', msg: 'job_dead', jobId: job.id, kind: job.kind, sentryIssueId: fields.sentryIssueId });
+      return true;
+    }
+    return false;
+  }
+
   const files = snippets(fields.event, repoDir);
   let errors = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -235,6 +249,7 @@ async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
       }
       if (!testsOk) {
         log({ msg: 'tests_failed', jobId: job.id, kind: job.kind, sentryIssueId: fields.sentryIssueId });
+        if (await say('tests_failed')) return;
       } else if (!dryRun() && proposal) {
         const opened = await openFixPull(pool, {
           job,
@@ -262,6 +277,7 @@ async function propose(pool, job, target, llm, limits, fields, repoDir, api) {
       return;
     }
     if (!review.retry) {
+      if (review.code === 'fix_does_not_apply' && await say('fix_does_not_apply')) return;
       await complete(pool, job, target.id, fields.sentryIssueId);
       return;
     }

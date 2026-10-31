@@ -62,6 +62,12 @@ function resetGithub() {
   state.truncatedTree = false;
 }
 
+function fixComments(code) {
+  const issue = [...state.issues.values()][0];
+  const body = `<!-- logs-watcher-fix: ${code} -->\n${code}`;
+  return (issue?.comments ?? []).filter((comment) => comment.body === body);
+}
+
 function bucket(number) {
   const issue = state.issues.get(number);
   if (issue) return issue;
@@ -655,7 +661,7 @@ test('any dry-run value other than false opens nothing', async () => {
     assert.equal(rows.rows[0].github_pr_number, null, String(flag));
     assert.equal(rows.rows[0].payload.dryRun, true, String(flag));
     assert.equal(state.pulls.length, 0, String(flag));
-    assert.equal(state.requests.some((req) => req.path.includes('/pulls') || req.path.includes('/git/')), false, String(flag));
+    assert.equal(state.requests.some((req) => req.path.startsWith('/repos/') || req.path.startsWith('/app/') || req.path === '/search/issues'), false, String(flag));
     assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done', String(flag));
   }
 });
@@ -754,9 +760,15 @@ test('a patch that is not in the GitHub file does not open a pull', async () => 
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
   assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
   assert.equal(state.branches.size, 0);
+  assert.equal(fixComments('fix_does_not_apply').length, 1);
+  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('Return the right total'), false);
+  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('return 2'), false);
+  assert.match([...state.issues.values()][0].body, /Estado del fix: detectado/);
   assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
 });
 
@@ -771,6 +783,8 @@ test('a repository that already has tests does not open a pull without a new tes
   assert.equal(state.pulls.length, 0);
   assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
   assert.equal(state.branches.size, 0);
+  assert.equal(fixComments('fix_does_not_apply').length, 0);
+  assert.equal(fixComments('tests_failed').length, 0);
 });
 
 test('a failing test command stores the proposal and does not open a pull', async () => {
@@ -785,12 +799,18 @@ test('a failing test command stores the proposal and does not open a pull', asyn
   try {
     await enqueue();
     await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+    await enqueue();
+    await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   } finally {
     console.log = original;
   }
   assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
   assert.equal(state.pulls.length, 0);
+  assert.equal(fixComments('tests_failed').length, 1);
+  assert.equal(fixComments('tests_failed')[0].body.includes('Return the right total'), false);
+  assert.equal(fixComments('tests_failed')[0].body.includes('return 2'), false);
   assert.match(lines.join('\n'), /tests_failed/);
+  assert.match([...state.issues.values()][0].body, /Estado del fix: detectado/);
   assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
 });
 
@@ -805,5 +825,60 @@ test('a passing test command opens the pull when the patched tree hides the mode
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 1);
+  assert.equal(fixComments('tests_failed').length, 0);
   assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+});
+
+test('a local patch that does not apply comments fix_does_not_apply and opens nothing', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  state.model = {
+    refusal: 'none',
+    summary: 'Return the right total',
+    evidence: [{ source: 'event', quote: 'orders broke badly' }],
+    patches: [{ path: 'src/orders.js', before: 'return 9;', after: 'return 2;' }],
+    newTests: [],
+  };
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
+  assert.equal(state.pulls.length, 0);
+  assert.equal(fixComments('fix_does_not_apply').length, 1);
+  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('return 9'), false);
+});
+
+test('dry run does not comment when the local patch does not apply', async () => {
+  delete process.env.LOGS_WATCHER_DRY_RUN;
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  state.model = {
+    refusal: 'none',
+    summary: 'Return the right total',
+    evidence: [{ source: 'event', quote: 'orders broke badly' }],
+    patches: [{ path: 'src/orders.js', before: 'return 9;', after: 'return 2;' }],
+    newTests: [],
+  };
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 0);
+  assert.equal(fixComments('fix_does_not_apply').length, 0);
+  assert.equal(state.requests.some((req) => req.method === 'POST' && req.path.includes('/comments')), false);
+  assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
+});
+
+test('dry run does not comment when the test command would fail', async () => {
+  delete process.env.LOGS_WATCHER_DRY_RUN;
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] });
+  const repo = makeRepo();
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 0);
+  assert.equal(fixComments('tests_failed').length, 0);
+  assert.equal(state.requests.some((req) => req.method === 'POST' && req.path.includes('/comments')), false);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
 });
