@@ -272,7 +272,7 @@ async function gh(api, token, method, path, payload) {
   }
 }
 
-function failure(res) {
+export function failure(res) {
   if (res.status === 429 || res.status >= 500) return { retry: true, status: res.status, retryAfter: res.retryAfter };
   if (res.status >= 400) return { dead: true, status: res.status };
   return null;
@@ -451,6 +451,22 @@ async function syncLabels(call, repo, number, issue, names) {
     if (problem) return problem;
   }
   return null;
+}
+
+const FIX_COMMENT = new Set(['tests_failed', 'fix_does_not_apply']);
+
+export async function commentFixCode(target, api, issueNumber, code, call) {
+  if (dryRun()) return null;
+  if (!FIX_COMMENT.has(code) || !Number.isInteger(issueNumber)) return null;
+  let github = call;
+  if (!github) {
+    const session = await openGithub(target, api);
+    if (session.missing) return null;
+    if (session.retry || session.dead) return session;
+    github = session.call;
+  }
+  const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
+  return commentOnce(github, repo, issueNumber, `logs-watcher-fix: ${code}`, code);
 }
 
 // shortcut: markers are checked in the oldest 100 comments, page when an issue passes that.

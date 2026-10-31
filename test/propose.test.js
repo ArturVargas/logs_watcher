@@ -309,13 +309,12 @@ test('a change over the line cap stores nothing pending', async () => {
   assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
 });
 
-test('src does not call typesafe, open a pull, or a log drain', () => {
+test('src does not call typesafe, merge a pull, or a log drain', () => {
   const files = readdirSync('src').filter((name) => name.endsWith('.js'));
   const text = files.map((name) => readFileSync(join('src', name), 'utf8')).join('\n');
   assert.equal(text.includes('api.typesafe.ai'), false);
   assert.equal(text.includes('webhooks/logs'), false);
   assert.equal(text.includes('/merge'), false);
-  const pulls = text.match(/\/pulls[^`'\n]*/g) ?? [];
-  assert.equal(pulls.length > 0, true);
-  for (const hit of pulls) assert.match(hit, /\/pulls\/\$\{number\}\/(comments|files)/);
+  assert.equal(text.includes('auto_merge'), false);
+  assert.match(text, /\$\{repo\}\/pulls`/);
 });
