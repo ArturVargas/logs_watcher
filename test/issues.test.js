@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, beforeEach, test } from 'node:test';
+import { docsKey } from '../src/docs.js';
 import { chooseLanguage } from '../src/issues.js';
 import { runOnce } from '../src/worker.js';
 import { listen, openTestDb } from './db.js';
@@ -18,7 +19,7 @@ const TREE = 'c'.repeat(40);
 const HEAD = 'b'.repeat(40);
 const state = {
   requests: [], issues: new Map(), next: 1, sentryIssue: null, event: null, model: null,
-  pulls: [], files: {}, branches: new Set(), blobs: [], trees: [], commits: [], labelNames: new Set(),
+  pulls: [], files: {}, branches: new Set(), blobs: [], trees: [], commits: [], labelNames: new Set(), refUpdates: [],
 };
 let db;
 let stub;
@@ -60,6 +61,7 @@ function resetGithub() {
   state.pulls = [];
   state.files = { 'src/orders.js': SOURCE };
   state.truncatedTree = false;
+  state.refUpdates = [];
 }
 
 function fixComments(code) {
@@ -180,8 +182,10 @@ before(async () => {
       }
       state.requests.push({ method: req.method, path: url.pathname, body, auth: req.headers.authorization || '' });
       if (req.method === 'POST' && url.pathname === '/chat/completions') {
+        const user = body?.messages?.map((message) => message?.content).join('\n') ?? '';
+        const content = user.includes('source="diff"') ? state.docsModel : state.model;
         send(res, 200, {
-          choices: [{ message: { content: JSON.stringify(state.model) } }],
+          choices: [{ message: { content: JSON.stringify(content) } }],
           usage: { prompt_tokens: 10, completion_tokens: 10 },
         });
         return;
@@ -276,9 +280,21 @@ before(async () => {
         state.trees.push(body);
         return send(res, 201, { sha: 'e'.repeat(40) });
       }
+      if (req.method === 'GET' && url.pathname.startsWith('/repos/acme/app/git/commits/') && url.pathname !== `/repos/acme/app/git/commits/${BASE}`) {
+        const sha = decodeURIComponent(url.pathname.split('/').pop());
+        const commit = state.commits.find((item) => item.sha === sha);
+        if (!commit) return send(res, 404, {});
+        return send(res, 200, { sha, message: commit.message, tree: { sha: 'e'.repeat(40) } });
+      }
       if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/commits') {
-        state.commits.push(body);
-        return send(res, 201, { sha: HEAD });
+        const sha = state.commits.length === 0 ? HEAD : 'f'.repeat(40);
+        state.commits.push({ ...body, sha });
+        return send(res, 201, { sha });
+      }
+      const updateRef = url.pathname.match(/^\/repos\/acme\/app\/git\/refs\/heads\/(.+)$/);
+      if (updateRef && req.method === 'PATCH') {
+        state.refUpdates.push({ name: decodeURIComponent(updateRef[1]), sha: body.sha, force: body.force ?? null });
+        return send(res, 200, { object: { sha: body.sha } });
       }
       if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/refs') {
         const name = String(body.ref || '').replace(/^refs\/heads\//, '');
@@ -350,6 +366,7 @@ beforeEach(async () => {
     patches: [{ path: 'src/orders.js', before: 'return 1;', after: 'return 2;' }],
     newTests: [],
   };
+  state.docsModel = { noChange: true, evidence: [], patches: [], newSections: [] };
   delete process.env.LOGS_WATCHER_DRY_RUN;
   delete process.env.LLM_API_KEY;
   delete process.env.LLM_MODEL;
@@ -881,4 +898,143 @@ test('dry run does not comment when the test command would fail', async () => {
   assert.equal(fixComments('tests_failed').length, 0);
   assert.equal(state.requests.some((req) => req.method === 'POST' && req.path.includes('/comments')), false);
   assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+});
+
+function writeRepo(repo, path, text) {
+  const full = join(repo, path);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, text);
+}
+
+function docsCalls() {
+  return state.requests.filter((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
+}
+
+const PAY = 'export function pay() {\n  return 1;\n}\n';
+const BILLING = 'The pay helper returns 1.\n';
+const MAP = 'rules:\n  - paths: ["src/billing/**"]\n    docs: ["docs/billing.md"]\n';
+
+function armBilling(repo) {
+  writeRepo(repo, 'src/billing/pay.ts', PAY);
+  state.files['src/billing/pay.ts'] = PAY;
+  state.files['docs/billing.md'] = BILLING;
+  state.files['docs/map.yml'] = MAP;
+  state.model = {
+    refusal: 'none',
+    summary: 'Return the right total',
+    evidence: [{ source: 'event', quote: 'orders broke badly' }],
+    patches: [{ path: 'src/billing/pay.ts', before: 'return 1;', after: 'return 2;' }],
+    newTests: [],
+  };
+}
+
+test('docs drift commits a docs patch on the fix branch before the pull opens', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  armBilling(repo);
+  state.docsModel = {
+    noChange: false,
+    evidence: [{ source: 'diff', quote: 'return 2;' }],
+    patches: [{ path: 'docs/billing.md', before: 'returns 1', after: 'returns 2' }],
+    newSections: [{ path: 'docs/billing.md', heading: '## Pay', body: 'Now returns 2.' }],
+  };
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  const pull = state.pulls[0];
+  const opened = state.requests.find((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
+  const diffAt = state.requests.findIndex((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
+  const pullAt = state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
+  assert.equal(state.pulls.length, 1);
+  assert.equal(opened.body.draft ?? null, null);
+  assert.match(pull.body, /actualizada en este PR/);
+  assert.equal(pull.body.includes('sin impacto'), false);
+  assert.equal(docsCalls().length, 1);
+  assert.equal(state.commits.length, 2);
+  assert.ok(state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits') < diffAt);
+  assert.ok(diffAt < state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits' && req.body?.message?.startsWith('docs: update')));
+  assert.ok(diffAt < pullAt);
+  assert.equal(state.commits[1].parents[0], HEAD);
+  assert.equal(state.commits[1].message, 'docs: update\n');
+  assert.equal(state.trees[1].tree.length, 1);
+  assert.equal(state.trees[1].tree[0].path, 'docs/billing.md');
+  assert.match(state.blobs.at(-1).content, /returns 2/);
+  assert.match(state.blobs.at(-1).content, /## Pay/);
+  assert.equal(state.blobs.at(-1).content.includes('src/billing'), false);
+  assert.equal(state.refUpdates.length, 1);
+  assert.equal(state.refUpdates[0].sha, 'f'.repeat(40));
+  assert.equal(state.refUpdates[0].force, null);
+  assert.equal([...state.branches].some((name) => name.startsWith('logs-watcher/docs-')), false);
+  assert.match(pull.head, /^logs-watcher\/fix-primary-42-/);
+  const rows = await db.pool.query(`SELECT kind, state, head_sha FROM proposals ORDER BY kind`);
+  assert.equal(rows.rows.some((row) => row.kind === 'docs'), false);
+  assert.equal(rows.rows.find((row) => row.kind === 'fix').head_sha, 'f'.repeat(40));
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+});
+
+test('a docs model that fails validation leaves the pull pending and does not commit docs', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  armBilling(repo);
+  state.docsModel = {
+    noChange: false,
+    evidence: [{ source: 'diff', quote: 'return 2;' }],
+    patches: [{ path: 'docs/billing.md', before: 'returns 9', after: 'returns 2' }],
+    newSections: [],
+  };
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(docsCalls().length, 1);
+  assert.equal(state.commits.length, 1);
+  assert.equal(state.refUpdates.length, 0);
+  assert.match(state.pulls[0].body, /pendiente/);
+  const docs = await db.pool.query(`SELECT state, generation_key FROM proposals WHERE kind = 'docs'`);
+  assert.equal(docs.rows[0].state, 'pending');
+  assert.equal(docs.rows[0].generation_key, docsKey('primary', '42', HEAD, ['src/billing/pay.ts']));
+  assert.equal(state.pulls.length, 1);
+});
+
+test('a markdown-only fix does not call the docs model', async () => {
+  process.env.LOGS_WATCHER_DRY_RUN = 'false';
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  const guide = 'old guide text\n';
+  writeRepo(repo, 'docs/guide.md', guide);
+  state.files['docs/guide.md'] = guide;
+  state.model = {
+    refusal: 'none',
+    summary: 'Return the right total',
+    evidence: [{ source: 'event', quote: 'orders broke badly' }],
+    patches: [{ path: 'docs/guide.md', before: 'old guide text', after: 'new guide text' }],
+    newTests: [],
+  };
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(docsCalls().length, 0);
+  assert.equal(state.commits.length, 1);
+  assert.match(state.pulls[0].body, /sin impacto/);
+});
+
+test('dry run writes no docs patch and does not call the docs model', async () => {
+  delete process.env.LOGS_WATCHER_DRY_RUN;
+  process.env.LLM_API_KEY = 'llm-key';
+  process.env.LLM_MODEL = 'qwen-test';
+  const repo = makeRepo();
+  armBilling(repo);
+  state.docsModel = {
+    noChange: false,
+    evidence: [{ source: 'diff', quote: 'return 2;' }],
+    patches: [{ path: 'docs/billing.md', before: 'returns 1', after: 'returns 2' }],
+    newSections: [],
+  };
+  await enqueue();
+  await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
+  assert.equal(state.pulls.length, 0);
+  assert.equal(state.commits.length, 0);
+  assert.equal(docsCalls().length, 0);
+  assert.equal(state.requests.some((req) => req.path.startsWith('/repos/') || req.path.startsWith('/app/')), false);
 });
