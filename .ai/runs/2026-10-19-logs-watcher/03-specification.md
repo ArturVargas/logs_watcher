@@ -444,14 +444,41 @@ Solo para `blocker`, `truncated` y `flow-blocked`. Rama: `logs-watcher/fix-{targ
 Pasos:
 
 1. Fetch del espejo bare del target en `/var/lib/logs-watcher/mirrors/{targetId}` y un worktree solo de este job en `/var/lib/logs-watcher/worktrees/{jobId}` (ADR-0023). Borrar el worktree al terminar, bien o mal.
-2. Una llamada LLM con el evento depurado, la lista de archivos que el stack cita y que existan en el clon (como máximo 8, 20 000 caracteres cada uno) y el esquema de abajo. El texto va dentro de `<untrusted>`.
-3. Validar. Si falla, una segunda llamada con los códigos de error. Si vuelve a fallar, no hay PR: comentario en el issue con el código `fix_invalid`. El progreso se queda en `detectado`.
-4. `git apply --check`. Si no aplica, no hay PR y el comentario lleva `fix_does_not_apply`.
+2. Una llamada de Qwen Cloud, que no es un especialista, con el evento depurado, la lista de archivos que el stack cita y que existan en el clon (como máximo 8, 20 000 caracteres cada uno) y el esquema de abajo. El texto va dentro de `<untrusted>`.
+3. Validar. Si falla, una segunda llamada de ese parche con los códigos de error. Esa segunda llamada no es la de un especialista. Si vuelve a fallar, no hay PR y no corre ningún especialista: comentario en el issue con el código `fix_invalid`. El progreso se queda en `detectado`.
+4. `git apply --check`. Si no aplica, no hay PR, no corre ningún especialista, y el comentario lleva `fix_does_not_apply`.
 5. Commit en la rama nueva. Mensaje: `fix: {summary}` con colas `Sentry-Issue: {id}` y `GitHub-Issue: {n}`. El `summary` validado tiene como máximo 400 caracteres.
-6. Correr la deriva de docs sobre ese diff, antes de abrir el PR. `generationKey` de esa corrida: SHA-256 de `docs\nfix\n{targetId}\n{sentryIssueId}\n{headSha}\n{paths ordenados separados por coma}`. Si hay parches válidos, van en un segundo commit de la misma rama. Si la deriva no produce parche, el fix sigue. La propuesta de docs queda `pending` solo cuando hubo candidatos y la validación falló.
-7. Abrir el PR contra `default_branch`, ya con los commits de fix y de docs. Cuerpo con el marcador de propuesta. Escribir en el issue el progreso `propuesta-abierta` y la URL del PR.
+6. Con ese diff ya depurado, el orquestador arma el paquete de contexto y llama a los especialistas de abajo, antes de abrir el PR. El orquestador es este job. No es uno de los ocho. La llamada de `docs` es la única deriva de documentación, no una segunda. `generationKey` de esa corrida: SHA-256 de `docs\nfix\n{targetId}\n{sentryIssueId}\n{headSha}\n{paths ordenados separados por coma}`. Si hay parches válidos de docs, van en un segundo commit de la misma rama. Si la deriva no produce parche, el fix sigue. La propuesta de docs queda `pending` solo cuando hubo candidatos y la validación falló.
+7. El orquestador fusiona en código el JSON aceptado y lo guarda en el `payload` de la propuesta. No añade una llamada de modelo para fusionarlo. Una salida vacía o sin cita literal se ignora y no se reintenta. Ese JSON no cambia el parche de Qwen.
+8. Abrir el PR contra `default_branch`, ya con los commits de fix y de docs, solo si `LOGS_WATCHER_DRY_RUN` es exactamente `false`. Si no lo es, la propuesta queda guardada y no hay escritura en GitHub. Cuerpo con el marcador de propuesta. Escribir en el issue el progreso `propuesta-abierta` y la URL del PR solo en esa escritura. Un comentario de los pasos 3 y 4 es escritura en GitHub y sigue la misma regla.
 
-Esquema que debe cumplir el modelo:
+El orquestador y los especialistas son roles del mismo proceso Node. No hay otro proceso, ni Redis, ni NATS. Sin un diff de código validado no corre ninguno. Más especializado es mejor: no hay un noveno ni un rol genérico. Solo corre el que el diff hace relevante. Cada uno, como máximo una vez. El que no aplica no se llama. La relevancia la decide código, antes de llamar. El orden es el de la tabla, saltando los que no aplican. Todas las llamadas cuentan para el tope diario. El paquete es el diff depurado más como máximo 15 candidatos de la sección Deriva de documentación. Cero candidatos es válido. Sin embeddings. El diff y los candidatos van dentro de `<untrusted>`. Solo `business` recibe además la clase ya calculada, también dentro de `<untrusted>`. Los demás no reciben la clase.
+
+| Especialista | Corre cuando | Habla de |
+| --- | --- | --- |
+| `solidity` | El diff tiene Solidity. | Contratos, reentrancy y control de acceso. |
+| `rust` | El diff tiene Rust. | unwrap, lifetimes y Send/Sync. |
+| `typescript-backend` | El diff tiene TypeScript de servidor o de API. | Servidor y API. No corre por interfaz ni por formularios. |
+| `typescript-frontend` | El diff tiene TypeScript de interfaz o de formularios. | Interfaz y formularios. No corre por servidor ni por API. |
+| `business` | Hay diff de código validado y la clase ya está calculada. | Impacto de usuario y de negocio, a partir del paquete y de esa severidad. No ve grabaciones de PostHog, ni correos, ni ids de usuario. No reclasifica. |
+| `docs` | La deriva ya llamaría al modelo. | Si `docs/` quedó desactualizado. Esa llamada es la única de deriva. |
+| `tests` | Hay un parche de código validado. | Si el parche necesita un test. No emite el test y no pide otra llamada de parche. |
+| `security` | El diff toca autenticación, transferencia de valor, o Rust `unsafe`. | Solo ese caso. No sustituye a `rust` ni a `solidity`. |
+
+Si el diff tiene los dos TypeScript, corren los dos, cada uno una vez. Un archivo que no es ninguno de los dos no llama a ninguno. Si `security` y `rust`, o `security` y `solidity`, son relevantes a la vez, corren los dos, cada uno una vez.
+
+Salida de cada especialista que no es `docs`:
+
+```json
+{
+  "evidence": [{ "source": "diff", "quote": "cita literal de al menos 8 caracteres" }],
+  "summary": "texto, máximo 400 caracteres"
+}
+```
+
+`source` es `diff` o `doc`. El orquestador solo conserva `evidence` y `summary` cuya cita sea subcadena de la fuente depurada que declara. El resto del objeto se ignora, incluida una clase, una urgencia o un parche. `docs` usa el esquema de la sección Deriva de documentación. Ningún especialista emite el parche de código, la edición de docs ni la escritura en GitHub. La edición de docs la emite el orquestador a partir de la única llamada de `docs`. El parche de código lo sigue escribiendo Qwen Cloud. JEv sigue clasificando la urgencia. La severidad sigue en código (ADR-0028).
+
+Esquema que debe cumplir el modelo del parche:
 
 ```json
 {
@@ -540,11 +567,13 @@ La CI está en verde solo cuando el estado combinado de ese SHA es `success` y c
 
 Se corre dentro del job de fix, antes de abrir el PR, y también en `pull_request` `opened`, `synchronize` y `reopened` cuando la rama no empieza por `logs-watcher/fix-`. Esas ramas ya llevaron la deriva en el job de fix. Un push posterior de una persona sobre `logs-watcher/fix-*` no relanza la deriva.
 
+Esta llamada es el especialista `docs`. Es una sola, no una segunda encima de la deriva. En el job de fix, los otros especialistas de ADR-0028 pueden correr sobre el mismo diff, cada uno una vez, y no repiten esta llamada. En un pull request que no es el job de fix, los otros siete no corren.
+
 1. Listar archivos del PR, como máximo 100. Si hay más, no se llama al modelo, métrica `docs_diff_too_large`, un solo comentario.
 2. Si todos los archivos están bajo `docs/` o terminan en `.md` o `.mdx`, fin.
 3. Candidatos desde `docs/map.yml` del head, si parsea. Si no parsea, métrica `docs_map_invalid` y se sigue sin esas reglas. Cada `docs` de una regla tiene que vivir bajo `docs/`. Como máximo 100 reglas.
 4. Por cada archivo de código cambiado, si el nombre sin extensión o el directorio padre tiene al menos 3 caracteres, añadir docs cuyo path contenga ese token.
-5. En las líneas añadidas, tokens de `(?:export )?(?:function|class|const|type|interface) ([A-Za-z_][A-Za-z0-9_]{2,})`. Búsqueda literal en docs. Primero los aciertos del mapa, luego los símbolos, luego el nombre. Tope 15 archivos.
+5. En las líneas añadidas, tokens de `(?:export )?(?:function|class|const|type|interface) ([A-Za-z_][A-Za-z0-9_]{2,})`. Búsqueda literal en docs. Primero los aciertos del mapa, luego el nombre y el directorio, luego los símbolos. Tope 15 archivos.
 6. Si hay más de 200 `.md` o `.mdx` bajo `docs/` y la lista queda vacía, métrica `docs_prefilter_empty_large_corpus` y fin. Sin embeddings.
 7. Si la lista queda vacía, fin, sin llamada al modelo.
 8. Una llamada. Parches solo bajo `docs/`. Mismas reglas de `before` único y de citas. `generationKey` de un PR ya abierto: SHA-256 de `docs\n{targetId}\n{prNumber}\n{headSha}\n{paths ordenados separados por coma}`. La rama de un PR de docs que no es el fix es `logs-watcher/docs-{targetId}-{prNumber}-{8 hex}`.
@@ -694,6 +723,8 @@ El bloque de conteos se reemplaza en cada barrido si los marcadores aparecen una
 | Cambiar el archivo después del análisis deja la propuesta `stale` y no hace push. | Mover el blob y correr el chequeo. |
 | `/logs-watcher approve` escrito por un `COLLABORATOR` marca `approved`. El mismo texto dentro de una frase, o escrito por un `Bot`, no hace nada. | Tres comentarios fixture. |
 | Un PR de código que cambia `src/billing/pay.ts` y un mapa que apunta a `docs/billing.md` produce un parche solo bajo `docs/`. | Fixture de diff más `docs/map.yml`. |
+| Un fix con un diff solo `.sol` llama a `solidity` una vez y no llama a `rust`, `typescript-backend` ni `typescript-frontend`. `security` no corre si ese diff no toca autenticación, transferencia de valor ni Rust `unsafe`. | Fixture de un solo `.sol` sin esos tres. |
+| La llamada de `docs` sigue siendo una cuando el fix también llama a otros especialistas. Un JSON de especialista sin cita literal se ignora y no se vuelve a pedir. El orquestador no hace otra llamada para fusionar ese JSON. | Contador de llamadas y fixture de salida vacía. |
 | Un PR desde un fork no recibe push. | Head repo distinto del base. |
 | La consulta de PostHog no selecciona `distinct_id` ni correo, y el issue no contiene `@` ni la query de la URL. | Aserción sobre el SQL construido y sobre el cuerpo. |
 | Con `funnels` y `validationEvents` vacíos, y con el ejemplo de pago y formulario solo en comentarios, no se consultan esos eventos ni se abre un issue. | Barrido con la configuración de ejemplo. |
@@ -717,7 +748,8 @@ El bloque de conteos se reemplaza en cada barrido si los marcadores aparecen una
 | Issue de Sentry 404 | API | Job `done`, sin issue de GitHub | No |
 | 401 o 403 de Sentry, GitHub o PostHog | HTTP | Job `dead`, alerta | No |
 | 429 o 5xx de un proveedor | HTTP | Espera de ADR-0016 | Hasta 5 |
-| JSON del modelo inválido | Validador | Una segunda llamada | Solo esa |
+| JSON del parche inválido | Validador | Una segunda llamada de ese parche | Solo esa |
+| JSON de especialista vacío o sin cita literal | Validador | Se ignora. No cambia el parche ni la clase | No |
 | Parche que no aplica | `git apply --check` | Sin PR, comentario `fix_does_not_apply` | No, hasta `refresh` |
 | Presupuesto diario agotado | Suma de `cost_ledger` | `deferred_budget` hasta la medianoche UTC | Solo entonces |
 | Bloque del issue editado a mano | `before` no único | Comentario, `progress_stale`, sin reescritura | No |
@@ -735,7 +767,7 @@ El texto de `last_error` pasa por el depurador antes de guardarse. No se guarda 
 - Seguridad y privacidad: firmar los dos webhooks; mínimo privilegio de la GitHub App (ADR-0004); depurar secretos y PII antes de logs, GitHub, prompts y columnas retenidas; no tratar el contenido externo como instrucciones (ADR-0005); Postgres solo en localhost; issues de PostHog solo con agregados (ADR-0013). El depurador concreto está en la arquitectura.
 - Rendimiento y disponibilidad: el webhook no llama al modelo y responde en menos de 2 segundos cuando Postgres está bien. Un solo nodo, sin objetivo de alta disponibilidad. Un job a la vez.
 - Accesibilidad: no aplica. El servicio no tiene interfaz de usuario. Los issues son Markdown de GitHub.
-- Coste: tope diario 5.00 USD, precios por defecto 0.40 y 1.60 USD por millón de tokens de entrada y de salida, prompt de usuario a 80 000 caracteres, salida a 4 096 tokens, una llamada de clasificación, como máximo dos de fix y una de docs por job (ADR-0016). La vía PostHog no gasta modelo.
+- Coste: tope diario 5.00 USD, precios por defecto 0.40 y 1.60 USD por millón de tokens de entrada y de salida, prompt de usuario a 80 000 caracteres, salida a 4 096 tokens, una llamada de clasificación, como máximo dos del parche de fix, una de docs —el especialista `docs`— y como máximo una por cada otro especialista relevante. El orquestador no añade una llamada para fusionar el JSON. Todas cuentan para el tope diario (ADR-0016, ADR-0028). La vía PostHog no gasta modelo.
 
 Tasa de salida: GitHub 4 solicitudes por segundo, Sentry 2, PostHog 1. Ante 429 se usa `Retry-After` si es un entero en segundos; si no, la espera del reintento.
 
@@ -762,3 +794,5 @@ OQ-3 está cerrada. El host de PostHog es `https://us.posthog.com`. `projectId`,
 OQ-4 está cerrada. Los parches los escribe Qwen Cloud (ADR-0025 y la sección Parches con Qwen Cloud). El id de modelo y la clave los pone el operador. JEv no escribe parches.
 
 La revisión determinista está cerrada (ADR-0027 y la sección Revisión determinista por lenguaje). El código vigilado es Solidity, Rust y TypeScript. La herramienta es la del archivo. El primer corte es un webhook `pull_request`, un símbolo, un hallazgo y un comentario en línea. Publicar el comentario no fusiona.
+
+Los especialistas del fix están cerrados (ADR-0028 y la sección Flujo del agente de fix). Son como máximo ocho, roles del mismo proceso. El orquestador es el job de fix, no es uno de ellos, y no añade una llamada para fusionar su JSON.
