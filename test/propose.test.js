@@ -271,8 +271,10 @@ test('a valid truncated patch is stored and github is not called', async () => {
   assert.equal(calls.some((url) => url.startsWith('https://api.github.com')), false);
   assert.match(lines.join('\n'), /proposal_stored/);
   assert.equal(lines.join('\n').includes('return 2;'), false);
-  const cost = await db.pool.query(`SELECT kind FROM cost_ledger`);
-  assert.equal(cost.rows.length, 1);
+  const cost = await db.pool.query(`SELECT kind FROM cost_ledger ORDER BY kind`);
+  assert.deepEqual(cost.rows.map((row) => row.kind), ['propose', 'specialist', 'specialist']);
+  assert.deepEqual(rows.rows[0].payload.specialists.selected, ['business', 'tests']);
+  assert.equal(rows.rows[0].payload.specialists.docs, 'drift');
   assert.equal(cost.rows[0].kind, 'propose');
 });
 
