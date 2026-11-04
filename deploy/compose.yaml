@@ -1,0 +1,80 @@
+# logs-watcher: app + postgres 16. Nothing is published to 0.0.0.0.
+name: logs-watcher
+
+x-hardening: &hardening
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:16
+    user: postgres
+    environment:
+      POSTGRES_USER: logs_watcher
+      POSTGRES_DB: logs_watcher
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    tmpfs: [/var/run/postgresql, /tmp]
+    networks: [internal]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 200
+    shm_size: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logs_watcher -d logs_watcher"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  migrate:
+    image: postgres:16
+    user: postgres
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    restart: "no"
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${APP_SRC:-./app}/sql/schema.sql:/schema.sql:ro
+    command: ["psql", "-h", "db", "-U", "logs_watcher", "-d", "logs_watcher", "-v", "ON_ERROR_STOP=1", "-f", "/schema.sql"]
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [internal]
+
+  app:
+    <<: *hardening
+    build: ${APP_SRC:-./app}
+    image: logs-watcher:local
+    env_file: .env
+    environment:
+      LOGS_WATCHER_HOST: 0.0.0.0
+      LOGS_WATCHER_PORT: "8080"
+      LOGS_WATCHER_CONFIG: /etc/logs-watcher/config.json
+    volumes:
+      - ./config:/etc/logs-watcher:ro
+    tmpfs: ["/tmp:size=256m"]
+    ports:
+      - "127.0.0.1:8787:8080"
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    networks: [internal, egress]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  pgdata: {}

@@ -39,7 +39,7 @@ async function main() {
   loadConfig();
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   const server = createServer(pool);
-  server.listen(8080, '127.0.0.1');
+  server.listen(Number(process.env.LOGS_WATCHER_PORT || 8080), process.env.LOGS_WATCHER_HOST || '127.0.0.1');
   for (;;) {
     try {
       await runOnce(pool);

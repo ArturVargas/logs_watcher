@@ -1,0 +1,12 @@
+.git
+node_modules
+.ai
+docs
+template
+templates
+standards
+test
+deploy
+Dockerfile
+.dockerignore
+*.md
