@@ -98,6 +98,7 @@ function normalizeTarget(target) {
     issueLanguage: target.issueLanguage || 'both',
     phases: { cicd: target.phases?.cicd === true },
     testCommand: target.testCommand ?? null,
+    specialists: target.specialists && typeof target.specialists === 'object' ? target.specialists : {},
   };
 }
 

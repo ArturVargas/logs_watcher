@@ -183,7 +183,7 @@ before(async () => {
       state.requests.push({ method: req.method, path: url.pathname, body, auth: req.headers.authorization || '' });
       if (req.method === 'POST' && url.pathname === '/chat/completions') {
         const user = body?.messages?.map((message) => message?.content).join('\n') ?? '';
-        const content = user.includes('source="diff"') ? state.docsModel : state.model;
+        const content = user.includes('"noChange"') ? state.docsModel : state.model;
         send(res, 200, {
           choices: [{ message: { content: JSON.stringify(content) } }],
           usage: { prompt_tokens: 10, completion_tokens: 10 },
@@ -907,7 +907,7 @@ function writeRepo(repo, path, text) {
 }
 
 function docsCalls() {
-  return state.requests.filter((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
+  return state.requests.filter((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('"noChange"')));
 }
 
 const PAY = 'export function pay() {\n  return 1;\n}\n';
@@ -944,7 +944,7 @@ test('docs drift commits a docs patch on the fix branch before the pull opens', 
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   const pull = state.pulls[0];
   const opened = state.requests.find((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
-  const diffAt = state.requests.findIndex((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
+  const diffAt = state.requests.findIndex((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('"noChange"')));
   const pullAt = state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
   assert.equal(state.pulls.length, 1);
   assert.equal(opened.body.draft ?? null, null);
