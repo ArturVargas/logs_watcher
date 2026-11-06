@@ -1,4 +1,4 @@
-const PATTERNS = [
+const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/github_pat_[A-Za-z0-9_]+/g, '[redacted]'],
   [/\bgh[pours]_[A-Za-z0-9_]+/g, '[redacted]'],
   [/sk-[A-Za-z0-9_-]{20,}/g, '[redacted]'],
@@ -11,13 +11,13 @@ const PATTERNS = [
   [/\?[^"\s<]*/g, '?[redacted]'],
 ];
 
-export function scrub(text) {
+export function scrub(text: unknown): string {
   let out = String(text ?? '');
   for (const [pattern, replacement] of PATTERNS) out = out.replace(pattern, replacement);
   return out;
 }
 
-export function scrubJson(value) {
+export function scrubJson(value: unknown): unknown {
   const encoded = scrub(JSON.stringify(value));
-  return JSON.parse(encoded);
+  return JSON.parse(encoded) as unknown;
 }

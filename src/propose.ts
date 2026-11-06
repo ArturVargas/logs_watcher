@@ -1,3 +1,4 @@
+import type { Wire } from './types.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -16,23 +17,23 @@ const SUFFIXES = [
 ];
 const RETRY = new Set(['quote_missing', 'before_not_unique', 'path_denied', 'empty_catch', 'schema_invalid', 'test_required']);
 
-export function pathDenied(filePath) {
+export function pathDenied(filePath: Wire): Wire {
   if (typeof filePath !== 'string' || filePath === '' || filePath.startsWith('/') || filePath.includes('\\')) return true;
   const parts = filePath.split('/');
   if (parts.includes('..') || parts.includes('')) return true;
   if (filePath.startsWith('.git/') || filePath.startsWith('.github/') || filePath.startsWith('secrets/')) return true;
-  const base = parts[parts.length - 1];
+  const base = parts[parts.length - 1] ?? "";
   if (NAMES.has(base)) return true;
-  return SUFFIXES.some((suffix) => filePath.endsWith(suffix));
+  return SUFFIXES.some((suffix: Wire) => String(filePath ?? '').endsWith(String(suffix)));
 }
 
-function lineCount(text) {
+function lineCount(text: Wire): Wire {
   if (!text) return 0;
   const parts = text.split('\n');
   return text.endsWith('\n') ? parts.length - 1 : parts.length;
 }
 
-function occurrences(hay, needle) {
+function occurrences(hay: Wire, needle: Wire): Wire {
   if (!needle) return 0;
   let count = 0;
   let index = 0;
@@ -43,7 +44,7 @@ function occurrences(hay, needle) {
   return count;
 }
 
-function braceBody(src, openIndex) {
+function braceBody(src: Wire, openIndex: Wire): Wire {
   let depth = 0;
   let inString = false;
   let quote = '';
@@ -70,7 +71,7 @@ function braceBody(src, openIndex) {
   return null;
 }
 
-function maskLiterals(text) {
+function maskLiterals(text: Wire): Wire {
   let out = '';
   let quote = '';
   let escape = false;
@@ -108,7 +109,7 @@ function maskLiterals(text) {
   return out;
 }
 
-export function hasEmptyCatch(src) {
+export function hasEmptyCatch(src: Wire): Wire {
   const code = String(src ?? '');
   const masked = maskLiterals(code);
   const re = /\bcatch\s*(?:\([^)]*\))?\s*\{/g;
@@ -124,11 +125,11 @@ export function hasEmptyCatch(src) {
   return false;
 }
 
-function fail(code) {
+function fail(code: Wire): Wire {
   return { ok: false, code, retry: RETRY.has(code) };
 }
 
-function git(cwd, args) {
+function git(cwd: Wire, args: Wire): Wire {
   return spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -144,13 +145,13 @@ function git(cwd, args) {
 
 const SECRET_ENV = ['DATABASE_URL', 'LLM_API_KEY', 'SENTRY_AUTH_TOKEN', 'SENTRY_WEBHOOK_SECRET', 'GITHUB_WEBHOOK_SECRET', 'GITHUB_APP_PRIVATE_KEY_PATH', 'POSTHOG_API_KEY'];
 
-function inside(root, filePath) {
+function inside(root: Wire, filePath: Wire): Wire {
   const full = resolve(root, filePath);
   const base = resolve(root);
   return full === base || full.startsWith(base + sep);
 }
 
-function realDiff(patch, original) {
+function realDiff(patch: Wire, original: Wire): Wire {
   const dir = mkdtempSync(join(tmpdir(), 'lw-diff-'));
   const before = join(dir, 'before');
   const after = join(dir, 'after');
@@ -158,8 +159,8 @@ function realDiff(patch, original) {
     const at = original.indexOf(patch.before);
     writeFileSync(before, original);
     writeFileSync(after, original.slice(0, at) + patch.after + original.slice(at + patch.before.length));
-    const result = spawnSync('diff', ['-u', before, after], { encoding: 'utf8' });
-    if (result.status > 1) return null;
+    const result: Wire = spawnSync('diff', ['-u', before, after], { encoding: 'utf8' });
+    if ((result.status ?? 0) > 1) return null;
     const body = (result.stdout || '').replace(/^--- .*$/m, `--- a/${patch.path}`).replace(/^\+\+\+ .*$/m, `+++ b/${patch.path}`);
     return `diff --git a/${patch.path} b/${patch.path}\n${body}`;
   } finally {
@@ -167,18 +168,18 @@ function realDiff(patch, original) {
   }
 }
 
-function mismatchDiff(patch) {
+function mismatchDiff(patch: Wire): Wire {
   const removed = patch.before.split('\n')[0] || 'x';
   const added = patch.after.split('\n')[0] || 'y';
   return `diff --git a/${patch.path} b/${patch.path}\n--- a/${patch.path}\n+++ b/${patch.path}\n@@ -1,2 +1,2 @@\n logs-watcher-apply-mismatch\n-${removed}\n+${added}\n`;
 }
 
 // shortcut: no target mirror in this slice, so a missing repo is seeded from patch before-text; use the mirror when the fix loop clones.
-export function seedRepo(patches) {
+export function seedRepo(patches: Wire): Wire {
   const dir = mkdtempSync(join(tmpdir(), 'lw-seed-'));
   git(dir, ['init', '-b', 'main']);
   for (const patch of patches ?? []) {
-    if (!patch || pathDenied(patch.path) || typeof patch.before !== 'string') continue;
+    if (!patch || pathDenied(String(patch.path ?? '')) || typeof patch.before !== 'string') continue;
     const full = join(dir, patch.path);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, patch.before);
@@ -189,14 +190,14 @@ export function seedRepo(patches) {
 }
 
 // shortcut: testCommand runs in the job repo or the seeded patch tree, not a full target mirror; a command that needs the rest of the repo fails closed.
-export function testsPass(repoDir, payload, command) {
+export function testsPass(repoDir: Wire, payload: Wire, command: Wire): Wire {
   if (command == null) return true;
-  if (!repoDir || !Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string')) return false;
+  if (!repoDir || !Array.isArray(command) || command.length === 0 || command.some((part: Wire) => typeof part !== 'string')) return false;
   const dir = mkdtempSync(join(tmpdir(), 'lw-test-'));
   try {
     if (spawnSync('cp', ['-a', `${repoDir}/.`, dir]).status !== 0) return false;
     for (const patch of payload?.patches ?? []) {
-      if (!patch || pathDenied(patch.path) || !inside(dir, patch.path)) return false;
+      if (!patch || pathDenied(String(patch.path ?? '')) || !inside(dir, patch.path)) return false;
       const full = join(dir, patch.path);
       const original = existsSync(full) ? readFileSync(full, 'utf8') : '';
       const at = original.indexOf(patch.before);
@@ -204,7 +205,7 @@ export function testsPass(repoDir, payload, command) {
       writeFileSync(full, original.slice(0, at) + patch.after + original.slice(at + patch.before.length));
     }
     for (const file of payload?.newTests ?? []) {
-      if (!file || pathDenied(file.path) || typeof file.content !== 'string' || !inside(dir, file.path)) return false;
+      if (!file || pathDenied(String(file.path ?? '')) || typeof file.content !== 'string' || !inside(dir, file.path)) return false;
       const full = join(dir, file.path);
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, file.content);
@@ -217,7 +218,7 @@ export function testsPass(repoDir, payload, command) {
   }
 }
 
-function applyCheck(repoDir, diffText) {
+function applyCheck(repoDir: Wire, diffText: Wire): Wire {
   const dir = mkdtempSync(join(tmpdir(), 'lw-apply-'));
   const patchFile = join(tmpdir(), `lw-${createHash('sha256').update(diffText).digest('hex').slice(0, 12)}.diff`);
   try {
@@ -231,9 +232,9 @@ function applyCheck(repoDir, diffText) {
   }
 }
 
-function evidenceOk(evidence, eventText, files) {
+function evidenceOk(evidence: Wire, eventText: Wire, files: Wire): Wire {
   if (!Array.isArray(evidence) || evidence.length < 1) return false;
-  const fileText = files.map((file) => scrub(file.text)).join('\n');
+  const fileText = files.map((file: Wire) => scrub(file.text)).join('\n');
   for (const item of evidence) {
     if (!item || !['event', 'file', 'issue'].includes(item.source)) return false;
     if (typeof item.quote !== 'string' || item.quote.length < 8) return false;
@@ -243,7 +244,7 @@ function evidenceOk(evidence, eventText, files) {
   return true;
 }
 
-export function reviewFix({ targetId, sentryIssueId, eventId, eventText, repoDir, model, limits, severityClass, priority, files }) {
+export function reviewFix({ targetId, sentryIssueId, eventId, eventText, repoDir, model, limits, severityClass, priority, files }: Wire): Wire {
   if (!model || typeof model !== 'object') return fail('schema_invalid');
   if (!['none', 'insufficient_evidence', 'unsafe_scope', 'no_code_fix'].includes(model.refusal)) return fail('schema_invalid');
   if (model.refusal !== 'none') return { ok: false, code: model.refusal, retry: false };
@@ -254,9 +255,9 @@ export function reviewFix({ targetId, sentryIssueId, eventId, eventText, repoDir
   if (patches.length < 1 || patches.length > limits.maxFixFiles) return fail('schema_invalid');
   if (!evidenceOk(model.evidence, eventText, files)) return fail('quote_missing');
   let lines = 0;
-  const diffs = [];
+  const diffs: Wire[] = [] as Wire[];
   for (const patch of patches) {
-    if (!patch || pathDenied(patch.path) || typeof patch.before !== 'string' || typeof patch.after !== 'string') return fail('path_denied');
+    if (!patch || pathDenied(String(patch.path ?? '')) || typeof patch.before !== 'string' || typeof patch.after !== 'string') return fail('path_denied');
     if (!inside(repoDir, patch.path)) return fail('path_denied');
     if (hasEmptyCatch(patch.after)) return fail('empty_catch');
     lines += lineCount(patch.before) + lineCount(patch.after);
@@ -274,7 +275,7 @@ export function reviewFix({ targetId, sentryIssueId, eventId, eventText, repoDir
   if (head.status !== 0) return { ok: false, code: 'fix_does_not_apply', retry: false };
   const baseSha = head.stdout.trim();
   const hash = createHash('sha256');
-  for (const patch of [...patches].sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const patch of [...patches].sort((a: Wire, b: Wire) => a.path.localeCompare(b.path))) {
     hash.update(patch.path);
     hash.update('\0');
     hash.update(readFileSync(join(repoDir, patch.path)));

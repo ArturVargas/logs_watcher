@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,16 +10,16 @@ import { createServer } from '../src/main.js';
 import { listen } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-cfg-'));
-const servers = [];
+const servers: Wire[] = [];
 
-function write(name, text) {
+function write(name: Wire, text: Wire) {
   const file = join(dir, name);
   writeFileSync(file, text);
   return file;
 }
 
 after(async () => {
-  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  await Promise.all(servers.map((server: Wire) => new Promise((resolve: Wire) => server.close(resolve))));
 });
 
 test('a file without targets watches nothing', () => {
@@ -32,11 +33,11 @@ test('an empty owner is inactive and defaults fill in', () => {
   const config = loadConfig(write('owner.json', JSON.stringify({
     targets: [{ id: 'primary', github: { owner: '  ', name: 'app' } }],
   })));
-  assert.equal(config.targets[0].active, false);
-  assert.equal(config.targets[0].github.owner, '');
-  assert.equal(config.targets[0].sentry.baseUrl, 'https://sentry.io');
-  assert.equal(config.targets[0].posthog.host, 'https://us.posthog.com');
-  assert.equal(config.targets[0].phases.cicd, false);
+  assert.equal(config.targets[0]!.active, false);
+  assert.equal(config.targets[0]!.github.owner, '');
+  assert.equal(config.targets[0]!.sentry.baseUrl, 'https://sentry.io');
+  assert.equal(config.targets[0]!.posthog.host, 'https://us.posthog.com');
+  assert.equal(config.targets[0]!.phases.cicd, false);
 });
 
 test('a line comment does not eat // inside a string', () => {
@@ -47,8 +48,8 @@ test('a line comment does not eat // inside a string', () => {
       "sentry": { "baseUrl": "https://sentry.example/a//b" } // keep https://sentry.example/a//b
     }]
   }`));
-  assert.equal(config.targets[0].sentry.baseUrl, 'https://sentry.example/a//b');
-  assert.equal(config.targets[0].active, true);
+  assert.equal(config.targets[0]!.sentry.baseUrl, 'https://sentry.example/a//b');
+  assert.equal(config.targets[0]!.active, true);
 });
 
 test('dry run is on unless the variable is exactly false', () => {
@@ -67,16 +68,16 @@ test('phases.cicd is true only when the json says true', () => {
   const absent = loadConfig(write('cicd-absent.json', JSON.stringify({
     targets: [{ id: 'primary', github: { owner: 'acme', name: 'app' } }],
   })));
-  assert.equal(absent.targets[0].phases.cicd, false);
+  assert.equal(absent.targets[0]!.phases.cicd, false);
   assert.equal(absent.phases.cicd, false);
   const text = loadConfig(write('cicd-text.json', JSON.stringify({
     targets: [{ id: 'primary', github: { owner: 'acme', name: 'app' }, phases: { cicd: 'true' } }],
   })));
-  assert.equal(text.targets[0].phases.cicd, false);
+  assert.equal(text.targets[0]!.phases.cicd, false);
   const on = loadConfig(write('cicd-on.json', JSON.stringify({
     targets: [{ id: 'primary', github: { owner: 'acme', name: 'app' }, phases: { cicd: true } }],
   })));
-  assert.equal(on.targets[0].phases.cicd, true);
+  assert.equal(on.targets[0]!.phases.cicd, true);
   assert.equal(existsSync('.github/workflows'), false);
 });
 
@@ -85,9 +86,9 @@ test('healthz is 200 only when postgres answers', async () => {
   const server = createServer(pool);
   servers.push(server);
   const port = await listen(server);
-  const calls = [];
+  const calls: Wire[] = [];
   const real = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     calls.push(String(url));
     return real(url, opts);
   };

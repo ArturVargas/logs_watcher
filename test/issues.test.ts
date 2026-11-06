@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
@@ -12,28 +13,28 @@ import { runOnce } from '../src/worker.js';
 import { listen, openTestDb } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-issue-'));
-const repos = [];
+const repos: Wire[] = [];
 const SOURCE = 'export function total() {\n  return 1;\n}\n';
 const BASE = 'a'.repeat(40);
 const TREE = 'c'.repeat(40);
 const HEAD = 'b'.repeat(40);
-const state = {
-  requests: [], issues: new Map(), next: 1, sentryIssue: null, event: null, model: null,
-  pulls: [], files: {}, branches: new Set(), blobs: [], trees: [], commits: [], labelNames: new Set(), refUpdates: [],
+const state: Wire = {
+  requests: [] as Wire[], issues: new Map(), next: 1, sentryIssue: null, event: null, model: null,
+  pulls: [] as Wire[], files: {}, branches: new Set(), blobs: [] as Wire[], trees: [] as Wire[], commits: [] as Wire[], labelNames: new Set(), refUpdates: [] as Wire[],
 };
-let db;
-let stub;
-let stubUrl;
-let realFetch;
+let db: Wire;
+let stub: Wire;
+let stubUrl: Wire;
+let realFetch: Wire;
 
-function git(cwd, args) {
+function git(cwd: Wire, args: Wire) {
   const result = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'git failed');
 }
 
 function makeRepo() {
   const repo = mkdtempSync(join(tmpdir(), 'lw-repo-'));
-  const full = join(repo, 'src/orders.js');
+  const full = join(String(repo), 'src/orders.js');
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, SOURCE);
   git(repo, ['init', '-b', 'main']);
@@ -43,7 +44,7 @@ function makeRepo() {
   return repo;
 }
 
-function send(res, status, payload) {
+function send(res: Wire, status: Wire, payload: Wire) {
   const body = JSON.stringify(payload);
   res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
   res.end(body);
@@ -64,16 +65,16 @@ function resetGithub() {
   state.refUpdates = [];
 }
 
-function fixComments(code) {
+function fixComments(code: Wire) {
   const issue = [...state.issues.values()][0];
   const body = `<!-- logs-watcher-fix: ${code} -->\n${code}`;
-  return (issue?.comments ?? []).filter((comment) => comment.body === body);
+  return (issue?.comments ?? []).filter((comment: Wire) => comment.body === body);
 }
 
-function bucket(number) {
+function bucket(number: Wire) {
   const issue = state.issues.get(number);
   if (issue) return issue;
-  const pull = state.pulls.find((item) => item.number === number);
+  const pull = state.pulls.find((item: Wire) => item.number === number);
   if (!pull) return null;
   pull.labels ??= [];
   return pull;
@@ -99,7 +100,7 @@ function writeConfig({ installationId = '77', issueLanguage = 'both', testComman
   process.env.LOGS_WATCHER_CONFIG = file;
 }
 
-function truncatedEvent(overrides = {}) {
+function truncatedEvent(overrides: Wire = {}) {
   return {
     event_id: 'evt-1',
     type: 'error',
@@ -141,21 +142,21 @@ function blocks() {
   ].join('\n');
 }
 
-function seed(number, extra = {}) {
+function seed(number: Wire, extra: Wire = {}) {
   const issue = {
     number,
     state: 'open',
     title: 'old',
     body: blocks(),
     labels: [{ name: 'logs-watcher' }, { name: 'logs-watcher:sentry' }, { name: 'severity:truncated' }, { name: 'priority:p1' }],
-    comments: [],
+    comments: [] as Wire[],
     ...extra,
   };
   state.issues.set(number, issue);
   return issue;
 }
 
-async function enqueue(id = '42') {
+async function enqueue(id: Wire = '42') {
   await db.pool.query(
     `INSERT INTO jobs (id, kind, dedupe_key, state, run_after, payload)
      VALUES (gen_random_uuid(), 'classify_and_file', $2, 'queued', now(), $1::jsonb)
@@ -171,10 +172,10 @@ before(async () => {
   process.env.GITHUB_APP_ID = '12345';
   process.env.GITHUB_APP_PRIVATE_KEY_PATH = keyPath;
   process.env.SENTRY_AUTH_TOKEN = 'sentry-token';
-  stub = http.createServer((req, res) => {
+  stub = http.createServer((req: Wire, res: Wire) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     let raw = '';
-    req.on('data', (chunk) => { raw += chunk; });
+    req.on('data', (chunk: Wire) => { raw += chunk; });
     req.on('end', () => {
       let body = null;
       if (raw) {
@@ -182,8 +183,8 @@ before(async () => {
       }
       state.requests.push({ method: req.method, path: url.pathname, body, auth: req.headers.authorization || '' });
       if (req.method === 'POST' && url.pathname === '/chat/completions') {
-        const user = body?.messages?.map((message) => message?.content).join('\n') ?? '';
-        const content = user.includes('source="diff"') ? state.docsModel : state.model;
+        const user = body?.messages?.map((message: Wire) => message?.content).join('\n') ?? '';
+        const content = user.includes('"noChange"') ? state.docsModel : state.model;
         send(res, 200, {
           choices: [{ message: { content: JSON.stringify(content) } }],
           usage: { prompt_tokens: 10, completion_tokens: 10 },
@@ -209,7 +210,7 @@ before(async () => {
       }
       if (req.method === 'GET' && url.pathname === '/search/issues') {
         const marker = ((url.searchParams.get('q') || '').match(/logs-watcher-sentry-issue: [^"]+/) || [])[0];
-        const items = [...state.issues.values()].filter((item) => marker && item.body.includes(marker));
+        const items = [...state.issues.values()].filter((item: Wire) => marker && item.body.includes(marker));
         send(res, 200, { items });
         return;
       }
@@ -227,12 +228,12 @@ before(async () => {
         if (!issue) return send(res, 404, {});
         if (req.method === 'POST') {
           for (const name of body.labels ?? []) {
-            if (!issue.labels.some((item) => item.name === name)) issue.labels.push({ name });
+            if (!issue.labels.some((item: Wire) => item.name === name)) issue.labels.push({ name });
           }
           return send(res, 200, issue.labels);
         }
-        const name = decodeURIComponent(labels[2]);
-        issue.labels = issue.labels.filter((item) => item.name !== name);
+        const name = decodeURIComponent(labels[2]!);
+        issue.labels = issue.labels.filter((item: Wire) => item.name !== name);
         return send(res, 200, {});
       }
       const one = url.pathname.match(/^\/repos\/acme\/app\/issues\/(\d+)$/);
@@ -250,7 +251,7 @@ before(async () => {
       if (req.method === 'GET' && url.pathname === '/repos/acme/app') return send(res, 200, { default_branch: 'main' });
       const gitRef = url.pathname.match(/^\/repos\/acme\/app\/git\/ref\/heads\/(.+)$/);
       if (gitRef && req.method === 'GET') {
-        const name = decodeURIComponent(gitRef[1]);
+        const name = decodeURIComponent(gitRef[1]!);
         if (name === 'main') return send(res, 200, { object: { sha: BASE } });
         if (state.branches.has(name)) return send(res, 200, { object: { sha: HEAD } });
         return send(res, 404, {});
@@ -262,12 +263,12 @@ before(async () => {
         return send(res, 200, {
           sha: TREE,
           truncated: Boolean(state.truncatedTree),
-          tree: Object.keys(state.files).map((path) => ({ path, type: 'blob', mode: '100644' })),
+          tree: Object.keys(state.files).map((path: Wire) => ({ path, type: 'blob', mode: '100644' })),
         });
       }
       const contents = url.pathname.match(/^\/repos\/acme\/app\/contents\/(.+)$/);
       if (contents && req.method === 'GET') {
-        const path = contents[1].split('/').map(decodeURIComponent).join('/');
+        const path = contents[1]!.split('/').map(decodeURIComponent).join('/');
         const text = state.files[path];
         if (text == null) return send(res, 404, {});
         return send(res, 200, { type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') });
@@ -281,8 +282,8 @@ before(async () => {
         return send(res, 201, { sha: 'e'.repeat(40) });
       }
       if (req.method === 'GET' && url.pathname.startsWith('/repos/acme/app/git/commits/') && url.pathname !== `/repos/acme/app/git/commits/${BASE}`) {
-        const sha = decodeURIComponent(url.pathname.split('/').pop());
-        const commit = state.commits.find((item) => item.sha === sha);
+        const sha = decodeURIComponent(url.pathname.split('/').pop()!);
+        const commit = state.commits.find((item: Wire) => item.sha === sha);
         if (!commit) return send(res, 404, {});
         return send(res, 200, { sha, message: commit.message, tree: { sha: 'e'.repeat(40) } });
       }
@@ -293,7 +294,7 @@ before(async () => {
       }
       const updateRef = url.pathname.match(/^\/repos\/acme\/app\/git\/refs\/heads\/(.+)$/);
       if (updateRef && req.method === 'PATCH') {
-        state.refUpdates.push({ name: decodeURIComponent(updateRef[1]), sha: body.sha, force: body.force ?? null });
+        state.refUpdates.push({ name: decodeURIComponent(updateRef[1]!), sha: body.sha, force: body.force ?? null });
         return send(res, 200, { object: { sha: body.sha } });
       }
       if (req.method === 'POST' && url.pathname === '/repos/acme/app/git/refs') {
@@ -305,12 +306,12 @@ before(async () => {
       if (url.pathname === '/repos/acme/app/pulls') {
         if (req.method === 'GET') {
           const head = url.searchParams.get('head');
-          const items = state.pulls.filter((item) => !head || head === `acme:${item.head}`);
-          return send(res, 200, items.map((item) => ({ ...item, head: { ref: item.head } })));
+          const items = state.pulls.filter((item: Wire) => !head || head === `acme:${item.head}`);
+          return send(res, 200, items.map((item: Wire) => ({ ...item, head: { ref: item.head } })));
         }
         if (req.method === 'POST') {
           if (body.draft || body.merge_method || body.auto_merge != null) return send(res, 422, { message: 'not a plain pull' });
-          if (state.pulls.some((item) => item.head === body.head)) return send(res, 422, { message: 'A pull request already exists' });
+          if (state.pulls.some((item: Wire) => item.head === body.head)) return send(res, 422, { message: 'A pull request already exists' });
           const number = state.next;
           state.next += 1;
           const pull = {
@@ -320,7 +321,7 @@ before(async () => {
             head: body.head,
             base: body.base,
             html_url: `https://github.com/acme/app/pull/${number}`,
-            labels: [],
+            labels: [] as Wire[],
           };
           state.pulls.push(pull);
           return send(res, 201, pull);
@@ -334,8 +335,8 @@ before(async () => {
           state: 'open',
           title: body.title,
           body: body.body,
-          labels: (body.labels ?? []).map((name) => ({ name })),
-          comments: [],
+          labels: (body.labels ?? []).map((name: Wire) => ({ name })),
+          comments: [] as Wire[],
         };
         state.issues.set(number, issue);
         return send(res, 201, issue);
@@ -348,7 +349,7 @@ before(async () => {
   process.env.LLM_BASE_URL = stubUrl;
   db = await openTestDb();
   realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     if (String(url).startsWith('https://api.github.com')) throw new Error(`live github call ${url}`);
     return realFetch(url, opts);
   };
@@ -364,9 +365,9 @@ beforeEach(async () => {
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [{ path: 'src/orders.js', before: 'return 1;', after: 'return 2;' }],
-    newTests: [],
+    newTests: [] as Wire[],
   };
-  state.docsModel = { noChange: true, evidence: [], patches: [], newSections: [] };
+  state.docsModel = { noChange: true, evidence: [] as Wire[], patches: [] as Wire[], newSections: [] as Wire[] };
   delete process.env.LOGS_WATCHER_DRY_RUN;
   delete process.env.LLM_API_KEY;
   delete process.env.LLM_MODEL;
@@ -397,15 +398,15 @@ test('dry run performs no github write unless the flag is exactly false', async 
     else process.env.LOGS_WATCHER_DRY_RUN = flag;
     await enqueue();
     await runOnce(db.pool, { githubApi: stubUrl });
-    assert.equal(state.requests.some((req) => req.path.startsWith('/app/') || req.path.startsWith('/repos/') || req.path === '/search/issues'), false, String(flag));
+    assert.equal(state.requests.some((req: Wire) => req.path.startsWith('/app/') || req.path.startsWith('/repos/') || req.path === '/search/issues'), false, String(flag));
     const group = await db.pool.query('SELECT github_issue_number FROM groups');
-    assert.equal(group.rows[0].github_issue_number, null);
+    assert.equal(group.rows[0]!.github_issue_number, null);
   }
 });
 
 test('false opens one sentry issue and stores its number', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   try {
@@ -414,10 +415,10 @@ test('false opens one sentry issue and stores its number', async () => {
   } finally {
     console.log = original;
   }
-  const posts = state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/issues');
+  const posts = state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/issues');
   assert.equal(posts.length, 1);
   assert.equal(posts[0].auth, 'Bearer ghs_test');
-  const tokenCall = state.requests.find((req) => req.path === '/app/installations/77/access_tokens');
+  const tokenCall = state.requests.find((req: Wire) => req.path === '/app/installations/77/access_tokens');
   const payload = JSON.parse(Buffer.from(tokenCall.auth.replace('Bearer ', '').split('.')[1], 'base64url').toString());
   assert.equal(payload.iss, '12345');
   const issue = [...state.issues.values()][0];
@@ -431,16 +432,16 @@ test('false opens one sentry issue and stores its number', async () => {
   assert.match(issue.body, /10 en total, 7 en las últimas 24 h/);
   assert.match(issue.body, /Estado del fix: detectado/);
   assert.match(issue.body, /\/organizations\/org\/issues\/42\//);
-  assert.deepEqual(issue.labels.map((label) => label.name).sort(), ['logs-watcher', 'logs-watcher:sentry', 'priority:p1', 'severity:truncated']);
+  assert.deepEqual(issue.labels.map((label: Wire) => label.name).sort(), ['logs-watcher', 'logs-watcher:sentry', 'priority:p1', 'severity:truncated']);
   const group = await db.pool.query('SELECT github_issue_number, progress_stale FROM groups');
-  assert.equal(group.rows[0].github_issue_number, issue.number);
-  assert.equal(group.rows[0].progress_stale, false);
+  assert.equal(group.rows[0]!.github_issue_number, issue.number);
+  assert.equal(group.rows[0]!.progress_stale, false);
   const job = await db.pool.query('SELECT state FROM jobs');
-  assert.equal(job.rows[0].state, 'done');
+  assert.equal(job.rows[0]!.state, 'done');
   assert.match(lines.join('\n'), /issue_filed/);
   assert.equal(lines.join('\n').includes('ghs_test'), false);
   assert.equal(lines.join('\n').includes('PRIVATE'), false);
-  assert.equal(state.requests.some((req) => req.path.includes('/pulls')), false);
+  assert.equal(state.requests.some((req: Wire) => req.path.includes('/pulls')), false);
 });
 
 test('a later event updates the same issue, reopens it, and comments once', async () => {
@@ -459,19 +460,19 @@ test('a later event updates the same issue, reopens it, and comments once', asyn
   assert.equal(issue.state, 'open');
   assert.equal(issue.body.includes('HAND'), true);
   assert.match(issue.body, /Usuarios afectados \(conteo\): 40/);
-  assert.equal(issue.labels.some((label) => label.name === 'priority:p0'), true);
-  assert.equal(issue.labels.some((label) => label.name === 'priority:p1'), false);
-  assert.equal(issue.labels.some((label) => label.name === 'bug'), true);
+  assert.equal(issue.labels.some((label: Wire) => label.name === 'priority:p0'), true);
+  assert.equal(issue.labels.some((label: Wire) => label.name === 'priority:p1'), false);
+  assert.equal(issue.labels.some((label: Wire) => label.name === 'bug'), true);
   assert.equal(issue.comments.length, 1);
   assert.match(issue.comments[0].body, /<!-- logs-watcher-update: evt-2 -->/);
-  assert.equal(state.requests.some((req) => req.path === '/search/issues'), false);
-  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/issues').length, 0);
+  assert.equal(state.requests.some((req: Wire) => req.path === '/search/issues'), false);
+  assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/issues').length, 0);
   state.requests.length = 0;
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl });
   assert.equal(issue.comments.length, 1);
   const group = await db.pool.query('SELECT github_issue_number FROM groups');
-  assert.equal(group.rows[0].github_issue_number, issue.number);
+  assert.equal(group.rows[0]!.github_issue_number, issue.number);
 });
 
 test('several marker hits keep the lowest number and comment on the rest', async () => {
@@ -482,9 +483,9 @@ test('several marker hits keep the lowest number and comment on the rest', async
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl });
   assert.equal(state.issues.size, 2);
-  assert.equal(state.requests.some((req) => req.method === 'POST' && req.path === '/repos/acme/app/issues'), false);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/issues'), false);
   const group = await db.pool.query('SELECT github_issue_number FROM groups');
-  assert.equal(group.rows[0].github_issue_number, 4);
+  assert.equal(group.rows[0]!.github_issue_number, 4);
   assert.match(state.issues.get(4).body, /Usuarios afectados \(conteo\): 1/);
   assert.equal(state.issues.get(4).body.includes('Release: old'), false);
   assert.match(state.issues.get(9).comments[0].body, /duplicado de #4/);
@@ -497,7 +498,7 @@ test('several marker hits keep the lowest number and comment on the rest', async
 
 test('a broken owned block is not rewritten', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
-  seed(3, { body: '<!-- logs-watcher-sentry-issue: 42 -->\nedited by a person', labels: [] });
+  seed(3, { body: '<!-- logs-watcher-sentry-issue: 42 -->\nedited by a person', labels: [] as Wire[] });
   state.next = 10;
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl });
@@ -505,9 +506,9 @@ test('a broken owned block is not rewritten', async () => {
   assert.equal(issue.body, '<!-- logs-watcher-sentry-issue: 42 -->\nedited by a person');
   assert.match(issue.comments[0].body, /no se pueden actualizar/);
   const group = await db.pool.query('SELECT github_issue_number, progress_stale FROM groups');
-  assert.equal(group.rows[0].github_issue_number, 3);
-  assert.equal(group.rows[0].progress_stale, true);
-  assert.equal(state.requests.some((req) => req.method === 'PATCH'), false);
+  assert.equal(group.rows[0]!.github_issue_number, 3);
+  assert.equal(group.rows[0]!.progress_stale, true);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'PATCH'), false);
 });
 
 test('non-blocking and unclassified issues are filed without a proposal', async () => {
@@ -524,8 +525,8 @@ test('non-blocking and unclassified issues are filed without a proposal', async 
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl });
   const issue = [...state.issues.values()][0];
-  assert.equal(issue.labels.some((label) => label.name === 'auto-fix:no'), true);
-  assert.equal(issue.labels.some((label) => label.name === 'severity:non-blocking'), true);
+  assert.equal(issue.labels.some((label: Wire) => label.name === 'auto-fix:no'), true);
+  assert.equal(issue.labels.some((label: Wire) => label.name === 'severity:non-blocking'), true);
   assert.match(issue.body, /sin-fix-automatico/);
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
   assert.equal(state.pulls.length, 0);
@@ -547,8 +548,8 @@ test('non-blocking and unclassified issues are filed without a proposal', async 
   await runOnce(db.pool, { githubApi: stubUrl });
   const unclassified = [...state.issues.values()][0];
   assert.match(unclassified.body, /sin prioridad/);
-  assert.equal(unclassified.labels.some((label) => label.name.startsWith('priority:')), false);
-  assert.equal(unclassified.labels.some((label) => label.name === 'auto-fix:no'), true);
+  assert.equal(unclassified.labels.some((label: Wire) => label.name.startsWith('priority:')), false);
+  assert.equal(unclassified.labels.some((label: Wire) => label.name === 'auto-fix:no'), true);
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
   assert.equal(state.pulls.length, 0);
 });
@@ -565,7 +566,7 @@ test('both picks english and later text does not change it', async () => {
   assert.match(issue.body, /## What the error does/);
   assert.match(issue.body, /## Progress/);
   assert.equal(issue.body.includes('Qué hace el error'), false);
-  assert.equal((await db.pool.query('SELECT issue_language FROM groups')).rows[0].issue_language, 'en');
+  assert.equal((await db.pool.query('SELECT issue_language FROM groups')).rows[0]!.issue_language, 'en');
   state.event = truncatedEvent({
     event_id: 'evt-es',
     title: 'el fallo de la pagina cuando los usuarios no entran',
@@ -575,7 +576,7 @@ test('both picks english and later text does not change it', async () => {
   await runOnce(db.pool, { githubApi: stubUrl });
   assert.match(issue.body, /## What the error does/);
   assert.equal(issue.body.includes('Qué hace el error'), false);
-  assert.equal((await db.pool.query('SELECT issue_language FROM groups')).rows[0].issue_language, 'en');
+  assert.equal((await db.pool.query('SELECT issue_language FROM groups')).rows[0]!.issue_language, 'en');
 });
 
 test('missing installation id does not call github', async () => {
@@ -583,9 +584,9 @@ test('missing installation id does not call github', async () => {
   writeConfig({ installationId: '' });
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl });
-  assert.equal(state.requests.some((req) => req.path.startsWith('/app/') || req.path.startsWith('/repos/') || req.path === '/search/issues'), false);
-  assert.equal((await db.pool.query('SELECT github_issue_number FROM groups')).rows[0].github_issue_number, null);
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.equal(state.requests.some((req: Wire) => req.path.startsWith('/app/') || req.path.startsWith('/repos/') || req.path === '/search/issues'), false);
+  assert.equal((await db.pool.query('SELECT github_issue_number FROM groups')).rows[0]!.github_issue_number, null);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('a dry-run proposal keeps a null issue number until the flag is exactly false', async () => {
@@ -594,8 +595,8 @@ test('a dry-run proposal keeps a null issue number until the flag is exactly fal
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
-  assert.equal((await db.pool.query('SELECT github_issue_number FROM proposals')).rows[0].github_issue_number, null);
-  assert.equal(state.requests.some((req) => req.path.startsWith('/repos/')), false);
+  assert.equal((await db.pool.query('SELECT github_issue_number FROM proposals')).rows[0]!.github_issue_number, null);
+  assert.equal(state.requests.some((req: Wire) => req.path.startsWith('/repos/')), false);
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   state.requests.length = 0;
   await enqueue();
@@ -603,8 +604,8 @@ test('a dry-run proposal keeps a null issue number until the flag is exactly fal
   const proposal = await db.pool.query('SELECT github_issue_number, github_pr_number FROM proposals');
   const group = await db.pool.query('SELECT github_issue_number FROM groups');
   assert.equal(proposal.rowCount, 1);
-  assert.equal(proposal.rows[0].github_issue_number, group.rows[0].github_issue_number);
-  assert.equal(proposal.rows[0].github_pr_number, state.pulls[0].number);
+  assert.equal(proposal.rows[0]!.github_issue_number, group.rows[0]!.github_issue_number);
+  assert.equal(proposal.rows[0]!.github_pr_number, state.pulls[0].number);
   assert.equal(state.pulls.length, 1);
 });
 
@@ -613,7 +614,7 @@ test('a stored proposal opens one pull and a second run does not open another', 
   process.env.LLM_API_KEY = 'llm-key';
   process.env.LLM_MODEL = 'qwen-test';
   const repo = makeRepo();
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   try {
@@ -628,17 +629,17 @@ test('a stored proposal opens one pull and a second run does not open another', 
   const proposal = await db.pool.query('SELECT github_issue_number, github_pr_number, head_sha, generation_key, payload FROM proposals');
   const group = await db.pool.query('SELECT github_issue_number FROM groups');
   assert.equal(proposal.rowCount, 1);
-  assert.equal(proposal.rows[0].github_issue_number, group.rows[0].github_issue_number);
+  assert.equal(proposal.rows[0]!.github_issue_number, group.rows[0]!.github_issue_number);
   const pull = state.pulls[0];
   assert.equal(state.pulls.length, 1);
-  assert.equal(proposal.rows[0].github_pr_number, pull.number);
-  assert.equal(proposal.rows[0].head_sha, HEAD);
-  const hex = proposal.rows[0].generation_key.slice(4, 12);
+  assert.equal(proposal.rows[0]!.github_pr_number, pull.number);
+  assert.equal(proposal.rows[0]!.head_sha, HEAD);
+  const hex = proposal.rows[0]!.generation_key.slice(4, 12);
   assert.equal(pull.head, `logs-watcher/fix-primary-42-${hex}`);
   assert.equal(pull.base, 'main');
   assert.equal(pull.title, 'fix: Return the right total');
   const row = await db.pool.query('SELECT id FROM proposals');
-  assert.match(pull.body, new RegExp(`<!-- logs-watcher-proposal: ${row.rows[0].id} -->`));
+  assert.match(pull.body, new RegExp(`<!-- logs-watcher-proposal: ${row.rows[0]!.id} -->`));
   assert.match(pull.body, /<!-- logs-watcher-generation: [0-9a-f]{64} -->/);
   assert.match(pull.body, /## Qué cambia/);
   assert.match(pull.body, /sin impacto/);
@@ -651,15 +652,15 @@ test('a stored proposal opens one pull and a second run does not open another', 
   assert.equal(state.commits[0].parents[0], BASE);
   assert.match(state.commits[0].message, /Sentry-Issue: 42/);
   assert.match(state.commits[0].message, /GitHub-Issue: 1/);
-  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
-  assert.equal(state.requests.some((req) => req.path.includes('/merge') || req.body?.merge_method || req.body?.auto_merge != null), false);
+  assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
+  assert.equal(state.requests.some((req: Wire) => req.path.includes('/merge') || req.body?.merge_method || req.body?.auto_merge != null), false);
   const issue = [...state.issues.values()][0];
   assert.match(issue.body, /Estado del fix: propuesta-abierta/);
   assert.match(issue.body, new RegExp(`https://github.com/acme/app/pull/${pull.number}`));
-  assert.equal(pull.labels.some((label) => label.name === 'tests:missing'), true);
+  assert.equal(pull.labels.some((label: Wire) => label.name === 'tests:missing'), true);
   assert.match(lines.join('\n'), /pr_opened/);
   assert.equal(lines.join('\n').includes('return 2;'), false);
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('any dry-run value other than false opens nothing', async () => {
@@ -675,11 +676,11 @@ test('any dry-run value other than false opens nothing', async () => {
     await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
     const rows = await db.pool.query('SELECT github_pr_number, payload FROM proposals');
     assert.equal(rows.rowCount, 1, String(flag));
-    assert.equal(rows.rows[0].github_pr_number, null, String(flag));
-    assert.equal(rows.rows[0].payload.dryRun, true, String(flag));
+    assert.equal(rows.rows[0]!.github_pr_number, null, String(flag));
+    assert.equal(rows.rows[0]!.payload.dryRun, true, String(flag));
     assert.equal(state.pulls.length, 0, String(flag));
-    assert.equal(state.requests.some((req) => req.path.startsWith('/repos/') || req.path.startsWith('/app/') || req.path === '/search/issues'), false, String(flag));
-    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done', String(flag));
+    assert.equal(state.requests.some((req: Wire) => req.path.startsWith('/repos/') || req.path.startsWith('/app/') || req.path === '/search/issues'), false, String(flag));
+    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done', String(flag));
   }
 });
 
@@ -719,13 +720,13 @@ test('blocker, truncated, and flow-blocked each open one pull', async () => {
     await enqueue();
     await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
     const group = await db.pool.query('SELECT class, priority FROM groups');
-    assert.equal(group.rows[0].class, severity);
-    assert.equal(group.rows[0].priority, priority);
+    assert.equal(group.rows[0]!.class, severity);
+    assert.equal(group.rows[0]!.priority, priority);
     assert.equal(state.pulls.length, 1, severity);
-    assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 1, severity);
-    assert.equal(state.requests.some((req) => req.path.includes('/merge')), false, severity);
+    assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 1, severity);
+    assert.equal(state.requests.some((req: Wire) => req.path.includes('/merge')), false, severity);
     assert.match(state.pulls[0].body, new RegExp(`Clase: ${severity}`));
-    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done', severity);
+    assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done', severity);
   }
 });
 
@@ -741,8 +742,8 @@ test('a later event keeps the open pull', async () => {
   state.requests.length = 0;
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 1);
-  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
-  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, state.pulls[0].number);
+  assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls').length, 0);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0]!.github_pr_number, state.pulls[0].number);
 
   state.event = truncatedEvent({ event_id: 'evt-2' });
   state.requests.length = 0;
@@ -750,7 +751,7 @@ test('a later event keeps the open pull', async () => {
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   const rows = await db.pool.query('SELECT github_pr_number FROM proposals');
   assert.equal(rows.rowCount, 2);
-  assert.equal(rows.rows.filter((row) => row.github_pr_number != null).length, 1);
+  assert.equal(rows.rows.filter((row: Wire) => row.github_pr_number != null).length, 1);
   assert.equal(state.pulls.length, 1);
 });
 
@@ -780,13 +781,13 @@ test('a patch that is not in the GitHub file does not open a pull', async () => 
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
-  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0]!.github_pr_number, null);
   assert.equal(state.branches.size, 0);
   assert.equal(fixComments('fix_does_not_apply').length, 1);
-  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('Return the right total'), false);
-  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('return 2'), false);
-  assert.match([...state.issues.values()][0].body, /Estado del fix: detectado/);
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.equal(fixComments('fix_does_not_apply')[0]!.body.includes('Return the right total'), false);
+  assert.equal(fixComments('fix_does_not_apply')[0]!.body.includes('return 2'), false);
+  assert.match([...state.issues.values()][0]!.body, /Estado del fix: detectado/);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('a repository that already has tests does not open a pull without a new test', async () => {
@@ -798,7 +799,7 @@ test('a repository that already has tests does not open a pull without a new tes
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
-  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0]!.github_pr_number, null);
   assert.equal(state.branches.size, 0);
   assert.equal(fixComments('fix_does_not_apply').length, 0);
   assert.equal(fixComments('tests_failed').length, 0);
@@ -808,9 +809,9 @@ test('a failing test command stores the proposal and does not open a pull', asyn
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   process.env.LLM_API_KEY = 'llm-key';
   process.env.LLM_MODEL = 'qwen-test';
-  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] });
+  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] as Wire });
   const repo = makeRepo();
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   try {
@@ -821,14 +822,14 @@ test('a failing test command stores the proposal and does not open a pull', asyn
   } finally {
     console.log = original;
   }
-  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0]!.github_pr_number, null);
   assert.equal(state.pulls.length, 0);
   assert.equal(fixComments('tests_failed').length, 1);
-  assert.equal(fixComments('tests_failed')[0].body.includes('Return the right total'), false);
-  assert.equal(fixComments('tests_failed')[0].body.includes('return 2'), false);
+  assert.equal(fixComments('tests_failed')[0]!.body.includes('Return the right total'), false);
+  assert.equal(fixComments('tests_failed')[0]!.body.includes('return 2'), false);
   assert.match(lines.join('\n'), /tests_failed/);
-  assert.match([...state.issues.values()][0].body, /Estado del fix: detectado/);
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.match([...state.issues.values()][0]!.body, /Estado del fix: detectado/);
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('a passing test command opens the pull when the patched tree hides the model key', async () => {
@@ -836,14 +837,14 @@ test('a passing test command opens the pull when the patched tree hides the mode
   process.env.LLM_API_KEY = 'llm-key';
   process.env.LLM_MODEL = 'qwen-test';
   writeConfig({
-    testCommand: [process.execPath, '-e', "const fs=require('fs'); process.exit(fs.readFileSync('src/orders.js','utf8').includes('return 2;') && !process.env.LLM_API_KEY ? 0 : 1)"],
+    testCommand: [process.execPath, '-e', "const fs=require('fs'); process.exit(fs.readFileSync('src/orders.js','utf8').includes('return 2;') && !process.env.LLM_API_KEY ? 0 : 1)"] as Wire,
   });
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 1);
   assert.equal(fixComments('tests_failed').length, 0);
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('a local patch that does not apply comments fix_does_not_apply and opens nothing', async () => {
@@ -855,7 +856,7 @@ test('a local patch that does not apply comments fix_does_not_apply and opens no
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [{ path: 'src/orders.js', before: 'return 9;', after: 'return 2;' }],
-    newTests: [],
+    newTests: [] as Wire[],
   };
   const repo = makeRepo();
   await enqueue();
@@ -863,7 +864,7 @@ test('a local patch that does not apply comments fix_does_not_apply and opens no
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
   assert.equal(state.pulls.length, 0);
   assert.equal(fixComments('fix_does_not_apply').length, 1);
-  assert.equal(fixComments('fix_does_not_apply')[0].body.includes('return 9'), false);
+  assert.equal(fixComments('fix_does_not_apply')[0]!.body.includes('return 9'), false);
 });
 
 test('dry run does not comment when the local patch does not apply', async () => {
@@ -875,14 +876,14 @@ test('dry run does not comment when the local patch does not apply', async () =>
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [{ path: 'src/orders.js', before: 'return 9;', after: 'return 2;' }],
-    newTests: [],
+    newTests: [] as Wire[],
   };
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
   assert.equal(fixComments('fix_does_not_apply').length, 0);
-  assert.equal(state.requests.some((req) => req.method === 'POST' && req.path.includes('/comments')), false);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'POST' && req.path.includes('/comments')), false);
   assert.equal((await db.pool.query('SELECT id FROM proposals')).rowCount, 0);
 });
 
@@ -890,31 +891,31 @@ test('dry run does not comment when the test command would fail', async () => {
   delete process.env.LOGS_WATCHER_DRY_RUN;
   process.env.LLM_API_KEY = 'llm-key';
   process.env.LLM_MODEL = 'qwen-test';
-  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] });
+  writeConfig({ testCommand: [process.execPath, '-e', 'process.exit(1)'] as Wire });
   const repo = makeRepo();
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
   assert.equal(fixComments('tests_failed').length, 0);
-  assert.equal(state.requests.some((req) => req.method === 'POST' && req.path.includes('/comments')), false);
-  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0].github_pr_number, null);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'POST' && req.path.includes('/comments')), false);
+  assert.equal((await db.pool.query('SELECT github_pr_number FROM proposals')).rows[0]!.github_pr_number, null);
 });
 
-function writeRepo(repo, path, text) {
-  const full = join(repo, path);
+function writeRepo(repo: Wire, path: Wire, text: Wire) {
+  const full = join(String(repo), path);
   mkdirSync(dirname(full), { recursive: true });
-  writeFileSync(full, text);
+  writeFileSync(full, String(text));
 }
 
 function docsCalls() {
-  return state.requests.filter((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
+  return state.requests.filter((req: Wire) => req.path === '/chat/completions' && req.body?.messages?.some((message: Wire) => String(message.content).includes('"noChange"')));
 }
 
 const PAY = 'export function pay() {\n  return 1;\n}\n';
 const BILLING = 'The pay helper returns 1.\n';
 const MAP = 'rules:\n  - paths: ["src/billing/**"]\n    docs: ["docs/billing.md"]\n';
 
-function armBilling(repo) {
+function armBilling(repo: Wire) {
   writeRepo(repo, 'src/billing/pay.ts', PAY);
   state.files['src/billing/pay.ts'] = PAY;
   state.files['docs/billing.md'] = BILLING;
@@ -924,7 +925,7 @@ function armBilling(repo) {
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [{ path: 'src/billing/pay.ts', before: 'return 1;', after: 'return 2;' }],
-    newTests: [],
+    newTests: [] as Wire[],
   };
 }
 
@@ -943,17 +944,17 @@ test('docs drift commits a docs patch on the fix branch before the pull opens', 
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   const pull = state.pulls[0];
-  const opened = state.requests.find((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
-  const diffAt = state.requests.findIndex((req) => req.path === '/chat/completions' && req.body?.messages?.some((message) => String(message.content).includes('source="diff"')));
-  const pullAt = state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
+  const opened = state.requests.find((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
+  const diffAt = state.requests.findIndex((req: Wire) => req.path === '/chat/completions' && req.body?.messages?.some((message: Wire) => String(message.content).includes('"noChange"')));
+  const pullAt = state.requests.findIndex((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls');
   assert.equal(state.pulls.length, 1);
   assert.equal(opened.body.draft ?? null, null);
   assert.match(pull.body, /actualizada en este PR/);
   assert.equal(pull.body.includes('sin impacto'), false);
   assert.equal(docsCalls().length, 1);
   assert.equal(state.commits.length, 2);
-  assert.ok(state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits') < diffAt);
-  assert.ok(diffAt < state.requests.findIndex((req) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits' && req.body?.message?.startsWith('docs: update')));
+  assert.ok(state.requests.findIndex((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits') < diffAt);
+  assert.ok(diffAt < state.requests.findIndex((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/git/commits' && req.body?.message?.startsWith('docs: update')));
   assert.ok(diffAt < pullAt);
   assert.equal(state.commits[1].parents[0], HEAD);
   assert.equal(state.commits[1].message, 'docs: update\n');
@@ -965,12 +966,12 @@ test('docs drift commits a docs patch on the fix branch before the pull opens', 
   assert.equal(state.refUpdates.length, 1);
   assert.equal(state.refUpdates[0].sha, 'f'.repeat(40));
   assert.equal(state.refUpdates[0].force, null);
-  assert.equal([...state.branches].some((name) => name.startsWith('logs-watcher/docs-')), false);
+  assert.equal([...state.branches].some((name: Wire) => name.startsWith('logs-watcher/docs-')), false);
   assert.match(pull.head, /^logs-watcher\/fix-primary-42-/);
   const rows = await db.pool.query(`SELECT kind, state, head_sha FROM proposals ORDER BY kind`);
-  assert.equal(rows.rows.some((row) => row.kind === 'docs'), false);
-  assert.equal(rows.rows.find((row) => row.kind === 'fix').head_sha, 'f'.repeat(40));
-  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0].state, 'done');
+  assert.equal(rows.rows.some((row: Wire) => row.kind === 'docs'), false);
+  assert.equal(rows.rows.find((row: Wire) => row.kind === 'fix').head_sha, 'f'.repeat(40));
+  assert.equal((await db.pool.query('SELECT state FROM jobs')).rows[0]!.state, 'done');
 });
 
 test('a docs model that fails validation leaves the pull pending and does not commit docs', async () => {
@@ -983,7 +984,7 @@ test('a docs model that fails validation leaves the pull pending and does not co
     noChange: false,
     evidence: [{ source: 'diff', quote: 'return 2;' }],
     patches: [{ path: 'docs/billing.md', before: 'returns 9', after: 'returns 2' }],
-    newSections: [],
+    newSections: [] as Wire[],
   };
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
@@ -992,8 +993,8 @@ test('a docs model that fails validation leaves the pull pending and does not co
   assert.equal(state.refUpdates.length, 0);
   assert.match(state.pulls[0].body, /pendiente/);
   const docs = await db.pool.query(`SELECT state, generation_key FROM proposals WHERE kind = 'docs'`);
-  assert.equal(docs.rows[0].state, 'pending');
-  assert.equal(docs.rows[0].generation_key, docsKey('primary', '42', HEAD, ['src/billing/pay.ts']));
+  assert.equal(docs.rows[0]!.state, 'pending');
+  assert.equal(docs.rows[0]!.generation_key, docsKey('primary', '42', HEAD, ['src/billing/pay.ts']));
   assert.equal(state.pulls.length, 1);
 });
 
@@ -1010,7 +1011,7 @@ test('a markdown-only fix does not call the docs model', async () => {
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [{ path: 'docs/guide.md', before: 'old guide text', after: 'new guide text' }],
-    newTests: [],
+    newTests: [] as Wire[],
   };
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
@@ -1029,12 +1030,12 @@ test('dry run writes no docs patch and does not call the docs model', async () =
     noChange: false,
     evidence: [{ source: 'diff', quote: 'return 2;' }],
     patches: [{ path: 'docs/billing.md', before: 'returns 1', after: 'returns 2' }],
-    newSections: [],
+    newSections: [] as Wire[],
   };
   await enqueue();
   await runOnce(db.pool, { githubApi: stubUrl, repoDir: repo });
   assert.equal(state.pulls.length, 0);
   assert.equal(state.commits.length, 0);
   assert.equal(docsCalls().length, 0);
-  assert.equal(state.requests.some((req) => req.path.startsWith('/repos/') || req.path.startsWith('/app/')), false);
+  assert.equal(state.requests.some((req: Wire) => req.path.startsWith('/repos/') || req.path.startsWith('/app/')), false);
 });

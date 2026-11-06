@@ -1,0 +1,14 @@
+# systemd --user unit: cp to ~/.config/systemd/user/ ; systemctl --user enable --now logs-watcher
+[Unit]
+Description=logs-watcher (docker compose)
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/services/logs-watcher
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose stop
+
+[Install]
+WantedBy=default.target

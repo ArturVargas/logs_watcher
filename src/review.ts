@@ -1,3 +1,4 @@
+import type { Wire } from './types.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ const CHAINS = {
 const SKIP = new Set(['if', 'for', 'while', 'switch', 'catch', 'do', 'else', 'return', 'new', 'await', 'typeof', 'throw', 'case', 'delete', 'void', 'function', 'fn', 'impl', 'match', 'loop', 'unsafe']);
 const SECRET_ENV = ['DATABASE_URL', 'LLM_API_KEY', 'SENTRY_AUTH_TOKEN', 'SENTRY_WEBHOOK_SECRET', 'GITHUB_WEBHOOK_SECRET', 'GITHUB_APP_PRIVATE_KEY_PATH', 'POSTHOG_API_KEY'];
 
-export function languageOf(file) {
+export function languageOf(file: Wire): Wire {
   const path = String(file ?? '');
   if (path.endsWith('.sol')) return 'solidity';
   if (path.endsWith('.rs')) return 'rust';
@@ -22,18 +23,18 @@ export function languageOf(file) {
   return null;
 }
 
-function safeRelative(file) {
+function safeRelative(file: Wire): Wire {
   if (typeof file !== 'string' || file === '' || file.startsWith('/') || file.includes('\\')) return false;
   return !file.split('/').includes('..') && !file.split('/').includes('');
 }
 
-export function addedLines(patch) {
+export function addedLines(patch: Wire): Wire {
   const lines = new Set();
   let next = 0;
   for (const line of String(patch ?? '').split('\n')) {
     const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
-      next = Number(hunk[1]);
+      next = Number(hunk[1!]);
       continue;
     }
     if (!next || line.startsWith('\\')) continue;
@@ -44,11 +45,11 @@ export function addedLines(patch) {
   return lines;
 }
 
-function scanLine(raw, language, state) {
+function scanLine(raw: Wire, language: Wire, state: Wire): Wire {
   let { quote, block } = state;
   let code = '';
   for (let i = 0; i < raw.length; i += 1) {
-    const c = raw[i];
+    const c = raw[i!];
     const n = raw[i + 1];
     if (block) {
       if (c === '*' && n === '/') {
@@ -82,40 +83,40 @@ function scanLine(raw, language, state) {
   return { code, quote, block };
 }
 
-function declaration(code, language) {
+function declaration(code: Wire, language: Wire): Wire {
   if (language === 'solidity') {
     const named = code.match(/\b(?:contract|library|interface|function|modifier|struct|enum|error|event)\s+([A-Za-z_]\w*)/);
-    if (named) return { name: named[1], keyword: true };
+    if (named) return { name: named[1!], keyword: true };
   } else if (language === 'rust') {
     const text = code.replace(/\b(?:pub(?:\([^)]*\))?|async|unsafe|const|extern)\b/g, ' ');
     const fn = text.match(/\bfn\s+([A-Za-z_]\w*)/);
-    if (fn) return { name: fn[1], keyword: true };
+    if (fn) return { name: fn[1!], keyword: true };
     const item = text.match(/\b(?:struct|enum|trait|mod|type)\s+([A-Za-z_]\w*)/);
-    if (item) return { name: item[1], keyword: true };
+    if (item) return { name: item[1!], keyword: true };
     const impl = text.match(/\bimpl(?:\s*<[^>{]*>)?\s+(?:[A-Za-z_]\w*\s+for\s+)?([A-Za-z_]\w*)/);
-    if (impl) return { name: impl[1], keyword: true };
+    if (impl) return { name: impl[1!], keyword: true };
   } else if (language === 'typescript') {
     const named = code.match(/\b(?:function|class|interface|enum|type)\s+([A-Za-z_]\w*)/);
-    if (named) return { name: named[1], keyword: true };
+    if (named) return { name: named[1!], keyword: true };
     const arrow = code.match(/\b(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_]\w*)\s*=>/);
-    if (arrow) return { name: arrow[1], keyword: true };
+    if (arrow) return { name: arrow[1!], keyword: true };
   }
   const method = code.match(/^\s*(?:export\s+)?(?:default\s+)?(?:public\s+|private\s+|protected\s+|async\s+|static\s+|override\s+|readonly\s+|get\s+|set\s+|external\s+|internal\s+|payable\s+)*([A-Za-z_]\w*)\s*(?:<[^>{]*>)?\s*\(/);
-  if (method && !SKIP.has(method[1])) return { name: method[1], keyword: false };
+  if (method && !SKIP.has(method[1!])) return { name: method[1!], keyword: false };
   return null;
 }
 
 // shortcut: strings, comments, and Rust raw strings are skipped naively; revisit when a symbol range lands on the wrong line.
-export function enclosingSymbol(source, line, language) {
-  if (!CHAINS[language] || !Number.isInteger(line)) return null;
+export function enclosingSymbol(source: Wire, line: Wire, language: Wire): Wire {
+  if (!(CHAINS as Wire)[language!] || !Number.isInteger(line)) return null;
   const lines = String(source ?? '').split('\n');
-  const done = [];
-  const stack = [];
+  const done: Wire[] = [] as Wire[];
+  const stack: Wire[] = [] as Wire[];
   let depth = 0;
   let pending = null;
   let state = { quote: '', block: false };
   for (let i = 0; i < lines.length; i += 1) {
-    const parsed = scanLine(lines[i], language, state);
+    const parsed = scanLine(lines[i!], language, state);
     state = { quote: parsed.quote, block: parsed.block };
     const decl = declaration(parsed.code, language);
     if (decl && (decl.keyword || parsed.code.includes('{'))) pending = { name: decl.name, start: i + 1 };
@@ -145,12 +146,12 @@ export function enclosingSymbol(source, line, language) {
   return best ? { name: best.name, start: best.start, end: best.end } : null;
 }
 
-function onPath(bin) {
-  const result = spawnSync('which', [bin], { encoding: 'utf8' });
+function onPath(bin: Wire): Wire {
+  const result: Wire = spawnSync('which', [bin!], { encoding: 'utf8' });
   return result.status === 0;
 }
 
-export function defaultAvailable(tool, { repoDir } = {}) {
+export function defaultAvailable(tool: Wire, { repoDir }: Wire = {}): Wire {
   if (tool === 'eslint') return Boolean(repoDir) && existsSync(join(repoDir, 'node_modules/.bin/eslint'));
   if (tool === 'tsc') return Boolean(repoDir) && existsSync(join(repoDir, 'node_modules/.bin/tsc'));
   if (!repoDir) return false;
@@ -161,7 +162,7 @@ export function defaultAvailable(tool, { repoDir } = {}) {
   return false;
 }
 
-function commandFor(tool, file, repoDir) {
+function commandFor(tool: Wire, file: Wire, repoDir: Wire): Wire {
   if (tool === 'slither') return { cmd: 'slither', args: [file, '--json', '-'] };
   if (tool === 'aderyn') return { cmd: 'aderyn', args: ['--stdout', '-o', join(tmpdir(), `aderyn-${process.pid}.json`)] };
   if (tool === 'solhint') return { cmd: 'solhint', args: ['--formatter', 'json', file] };
@@ -174,41 +175,41 @@ function commandFor(tool, file, repoDir) {
   return null;
 }
 
-function toolEnv() {
+function toolEnv(): Wire {
   const env = { ...process.env };
-  for (const key of SECRET_ENV) delete env[key];
+  for (const key of SECRET_ENV) delete env[key!];
   return env;
 }
 
-function runTool(tool, { file, repoDir }) {
+function runTool(tool: Wire, { file, repoDir }: Wire): Wire {
   const spec = commandFor(tool, file, repoDir);
   if (!spec) return Promise.resolve({ ran: false, stdout: '' });
-  return new Promise((resolve) => {
+  return new Promise((resolve: Wire) => {
     let settled = false;
     let stdout = '';
-    const finish = (value) => {
+    const finish = (value: Wire) => {
       if (settled) return;
       settled = true;
       resolve(value);
     };
     const child = spawn(spec.cmd, spec.args, { cwd: repoDir, env: toolEnv(), timeout: 300_000 });
-    child.stdout?.on('data', (chunk) => {
+    child.stdout?.on('data', (chunk: Wire) => {
       if (stdout.length < 1_000_000) stdout += chunk;
     });
     child.stderr?.on('data', () => {});
-    child.on('error', (err) => finish({ ran: err.code !== 'ENOENT', stdout: '' }));
-    child.on('close', (code, signal) => finish({ ran: signal == null, stdout }));
+    child.on('error', (err: Wire) => finish({ ran: err.code !== 'ENOENT', stdout: '' }));
+    child.on('close', (code: Wire, signal: Wire) => finish({ ran: signal == null, stdout }));
   });
 }
 
-function level(value) {
+function level(value: Wire): Wire {
   const text = String(value ?? '').toLowerCase();
   if (text === '2' || text === '3' || text === 'error' || text === 'high' || text === 'critical') return 'error';
   if (text === '1' || text === 'warning' || text === 'medium' || text === 'moderate' || text === 'low') return 'warning';
   return 'info';
 }
 
-function makeFinding(fields, expected) {
+function makeFinding(fields: Wire, expected: Wire): Wire {
   const reported = String(fields.file || expected || '').replaceAll('\\', '/').replace(/^\.\//, '');
   const file = reported === expected || reported.endsWith(`/${expected}`) ? expected : null;
   const line = Number(fields.line);
@@ -223,11 +224,11 @@ function makeFinding(fields, expected) {
   };
 }
 
-function jsonValues(text) {
+function jsonValues(text: Wire): Wire {
   const raw = String(text ?? '').trim();
-  if (!raw) return [];
+  if (!raw) return [] as Wire[];
   try { return [JSON.parse(raw)]; } catch { /* one value per line, or a report wrapped in logs */ }
-  const values = [];
+  const values: Wire[] = [] as Wire[];
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) continue;
@@ -242,10 +243,10 @@ function jsonValues(text) {
   return values;
 }
 
-function parseLint(values, file) {
-  const out = [];
+function parseLint(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
-    for (const report of Array.isArray(value) ? value : [value]) {
+    for (const report of Array.isArray(value) ? value : [value!]) {
       for (const item of report?.messages || report?.errors || []) {
         out.push(makeFinding({
           file: item?.filePath || report?.filePath || file,
@@ -260,14 +261,14 @@ function parseLint(values, file) {
   return out.filter(Boolean);
 }
 
-function parseSlither(values, file) {
-  const out = [];
+function parseSlither(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
     for (const detector of value?.results?.detectors ?? []) {
-      const mapping = (detector.elements ?? []).find((item) => item?.source_mapping?.lines?.length)?.source_mapping;
+      const mapping = (detector.elements ?? []).find((item: Wire) => item?.source_mapping?.lines?.length)?.source_mapping;
       out.push(makeFinding({
         file: mapping?.filename_relative || file,
-        line: mapping?.lines?.[0],
+        line: mapping?.lines?.[0!],
         rule_id: detector.check,
         severity: detector.impact,
         message: detector.description,
@@ -277,11 +278,11 @@ function parseSlither(values, file) {
   return out.filter(Boolean);
 }
 
-function parseAderyn(values, file) {
-  const out = [];
+function parseAderyn(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
     for (const [key, severity] of [['high_issues', 'high'], ['low_issues', 'low']]) {
-      for (const issue of value?.[key]?.issues ?? []) {
+      for (const issue of value?.[key!]?.issues ?? []) {
         for (const instance of issue.instances ?? []) {
           out.push(makeFinding({
             file: instance.contract_path,
@@ -297,11 +298,11 @@ function parseAderyn(values, file) {
   return out.filter(Boolean);
 }
 
-function parseClippy(values, file) {
-  const out = [];
+function parseClippy(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
     if (value.reason !== 'compiler-message') continue;
-    const span = (value.message?.spans ?? []).find((item) => item.is_primary) || value.message?.spans?.[0];
+    const span = (value.message?.spans ?? []).find((item: Wire) => item.is_primary) || value.message?.spans?.[0!];
     out.push(makeFinding({
       file: span?.file_name,
       line: span?.line_start,
@@ -314,8 +315,8 @@ function parseClippy(values, file) {
 }
 
 // cargo-audit advisories have no source line; without one there is nothing to cite.
-function parseAudit(values, file) {
-  const out = [];
+function parseAudit(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
     for (const item of value?.vulnerabilities?.list ?? []) {
       out.push(makeFinding({
@@ -330,12 +331,12 @@ function parseAudit(values, file) {
   return out.filter(Boolean);
 }
 
-function parseDeny(values, file) {
-  const out = [];
+function parseDeny(values: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const value of values) {
     if (value.type && value.type !== 'diagnostic') continue;
     const fields = value.fields || value;
-    const label = (fields.labels ?? []).find((item) => item?.line != null || item?.line_start != null);
+    const label = (fields.labels ?? []).find((item: Wire) => item?.line != null || item?.line_start != null);
     out.push(makeFinding({
       file: label?.path || label?.file || file,
       line: label?.line ?? label?.line_start,
@@ -347,17 +348,17 @@ function parseDeny(values, file) {
   return out.filter(Boolean);
 }
 
-function parseTsc(stdout, file) {
-  const out = [];
+function parseTsc(stdout: Wire, file: Wire): Wire {
+  const out: Wire[] = [] as Wire[];
   for (const line of String(stdout ?? '').split('\n')) {
     const match = line.match(/^(.+)\((\d+),\d+\):\s+(error|warning)\s+(TS\d+):\s*(.*)$/);
     if (!match) continue;
-    out.push(makeFinding({ file: match[1], line: Number(match[2]), rule_id: match[4], severity: match[3], message: match[5] }, file));
+    out.push(makeFinding({ file: match[1!], line: Number(match[2!]), rule_id: match[4!], severity: match[3!], message: match[5!] }, file));
   }
   return out.filter(Boolean);
 }
 
-function parseFindings(tool, stdout, file) {
+function parseFindings(tool: Wire, stdout: Wire, file: Wire): Wire {
   if (tool === 'tsc') return parseTsc(stdout, file);
   const values = jsonValues(stdout);
   if (tool === 'slither') return parseSlither(values, file);
@@ -366,31 +367,31 @@ function parseFindings(tool, stdout, file) {
   if (tool === 'clippy') return parseClippy(values, file);
   if (tool === 'cargo-audit') return parseAudit(values, file);
   if (tool === 'cargo-deny') return parseDeny(values, file);
-  return [];
+  return [] as Wire[];
 }
 
-export async function oneCheck({ language, file, repoDir, available = defaultAvailable, run = runTool }) {
-  const chain = CHAINS[language];
+export async function oneCheck({ language, file, repoDir, available = defaultAvailable, run = runTool }: Wire): Promise<Wire> {
+  const chain = (CHAINS as Wire)[language!];
   if (!chain) return null;
   for (const tool of chain) {
     if (!available(tool, { file, repoDir })) continue;
-    const result = await run(tool, { file, repoDir });
+    const result: Wire = await run(tool, { file, repoDir });
     if (!result || result.ran === false) continue;
     return { tool, findings: parseFindings(tool, result.stdout ?? '', file) };
   }
   return null;
 }
 
-export function selectCitation({ path, content, patch, findings }) {
+export function selectCitation({ path, content, patch, findings }: Wire): Wire {
   const language = languageOf(path);
   if (!language || !Array.isArray(findings)) return null;
-  const changed = [...addedLines(patch)].sort((a, b) => a - b);
+  const changed = [...addedLines(patch)].sort((a: Wire, b: Wire) => a - b);
   if (!changed.length) return null;
-  const symbols = new Map(changed.map((line) => [line, enclosingSymbol(content, line, language)]));
+  const symbols = new Map(changed.map((line: Wire) => [line, enclosingSymbol(content, line, language)]));
   for (const finding of findings) {
     if (finding.file !== path || !finding.rule_id || !Number.isInteger(finding.line)) continue;
     const hit = enclosingSymbol(content, finding.line, language);
-    const anchor = changed.find((line) => {
+    const anchor = changed.find((line: Wire) => {
       if (line === finding.line) return true;
       const symbol = symbols.get(line);
       return hit && symbol && symbol.name === hit.name && symbol.start === hit.start;
@@ -401,25 +402,25 @@ export function selectCitation({ path, content, patch, findings }) {
   return null;
 }
 
-function watchedFiles(files) {
+function watchedFiles(files: Wire): Wire {
   return [...(files ?? [])]
-    .filter((file) => languageOf(file?.path) && safeRelative(file.path) && addedLines(file.patch).size)
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .filter((file: Wire) => languageOf(file?.path) && safeRelative(file.path) && addedLines(file.patch).size)
+    .sort((a: Wire, b: Wire) => a.path.localeCompare(b.path));
 }
 
-function git(args, { cwd, env }) {
-  return new Promise((resolve) => {
+function git(args: Wire, { cwd, env }: Wire): Wire {
+  return new Promise((resolve: Wire) => {
     const child = spawn('git', args, { cwd, env, timeout: 300_000 });
     child.stdout?.on('data', () => {});
     child.stderr?.on('data', () => {});
     child.on('error', () => resolve(false));
-    child.on('close', (code, signal) => resolve(signal == null && code === 0));
+    child.on('close', (code: Wire, signal: Wire) => resolve(signal == null && code === 0));
   });
 }
 
 const GITHUB_NAME = /^[A-Za-z0-9_.-]+$/;
 
-export async function checkoutHead({ owner, name, sha, token, dir, remote }) {
+export async function checkoutHead({ owner, name, sha, token, dir, remote }: Wire): Promise<Wire> {
   if (!dir || !/^[0-9a-f]{40}$/.test(String(sha ?? ''))) return false;
   const url = remote ?? (GITHUB_NAME.test(owner) && GITHUB_NAME.test(name) ? `https://github.com/${owner}/${name}.git` : '');
   if (!url) return false;
@@ -436,11 +437,11 @@ export async function checkoutHead({ owner, name, sha, token, dir, remote }) {
   return git(['checkout', '--detach', 'FETCH_HEAD'], { cwd: dir, env: base });
 }
 
-async function citeOne(file, { available, run, repoDir }) {
+async function citeOne(file: Wire, { available, run, repoDir }: Wire): Promise<Wire> {
   const language = languageOf(file.path);
   // shortcut: Solidity stays one file. TypeScript and Rust use the pull request checkout; eslint and tsc run only when that tree already has node_modules. No npm ci.
-  const check = async (dir) => {
-    const result = await oneCheck({ language, file: file.path, repoDir: dir, available, run });
+  const check = async (dir: Wire) => {
+    const result: Wire = await oneCheck({ language, file: file.path, repoDir: dir, available, run });
     if (!result) return null;
     return selectCitation({ path: file.path, content: file.content ?? '', patch: file.patch ?? '', findings: result.findings });
   };
@@ -456,7 +457,7 @@ async function citeOne(file, { available, run, repoDir }) {
   }
 }
 
-export function commentBody(finding) {
+export function commentBody(finding: Wire): Wire {
   if (!finding || !safeRelative(finding.file) || !Number.isInteger(finding.line) || finding.line < 1 || !finding.rule_id) return null;
   const file = String(finding.file).replaceAll('`', "'");
   const rule = String(finding.rule_id).replaceAll('`', "'").trim();
@@ -465,13 +466,13 @@ export function commentBody(finding) {
   return message ? `\`${file}:${finding.line}\` \`${rule}\`\n${message}` : `\`${file}:${finding.line}\` \`${rule}\``;
 }
 
-function failed(res) {
+function failed(res: Wire): Wire {
   if (!res || res.status === 429 || res.status >= 500) return { retry: true, status: res?.status ?? 503, retryAfter: res?.retryAfter };
   if (res.status >= 400) return { dead: true, status: res.status };
   return null;
 }
 
-async function postInline(call, { target, number, sha, citation }) {
+async function postInline(call: Wire, { target, number, sha, citation }: Wire): Promise<Wire> {
   const body = commentBody(citation.finding);
   if (!body) return { published: false };
   const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
@@ -479,10 +480,10 @@ async function postInline(call, { target, number, sha, citation }) {
   const listed = await call('GET', `${repo}/pulls/${number}/comments?per_page=100`);
   const problem = failed(listed);
   if (problem) return problem;
-  let comments = [];
+  let comments: Wire[] = [] as Wire[];
   try { comments = JSON.parse(listed.text); } catch { return { dead: true, status: listed.status }; }
   if (!Array.isArray(comments)) return { dead: true, status: listed.status };
-  if (comments.some((comment) => String(comment.body ?? '').includes(body.split('\n')[0]))) return { published: false };
+  if (comments.some((comment: Wire) => String(comment.body ?? '').includes(body.split('\n')[0!]))) return { published: false };
   if (dryRun()) return { published: false };
   const res = await call('POST', `${repo}/pulls/${number}/comments`, {
     body,
@@ -497,20 +498,20 @@ async function postInline(call, { target, number, sha, citation }) {
   return { published: true };
 }
 
-async function loadPullFile(call, target, number) {
+async function loadPullFile(call: Wire, target: Wire, number: Wire): Promise<Wire> {
   const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
   // shortcut: the first 100 pull request files are considered, page when a pull request exceeds that.
   const listed = await call('GET', `${repo}/pulls/${number}/files?per_page=100`);
   const problem = failed(listed);
   if (problem) return problem;
-  let files = [];
+  let files: Wire[] = [] as Wire[];
   try { files = JSON.parse(listed.text); } catch { return { dead: true, status: listed.status }; }
   if (!Array.isArray(files)) return { dead: true, status: listed.status };
-  const watched = watchedFiles(files.filter((item) => item.status !== 'removed').map((item) => ({ path: item.filename, patch: item.patch || '' })));
+  const watched = watchedFiles(files.filter((item: Wire) => item.status !== 'removed').map((item: Wire) => ({ path: item.filename, patch: item.patch || '' })));
   return { files: watched };
 }
 
-async function readContent(call, target, sha, file) {
+async function readContent(call: Wire, target: Wire, sha: Wire, file: Wire): Promise<Wire> {
   const repo = `/repos/${encodeURIComponent(target.github.owner)}/${encodeURIComponent(target.github.name)}`;
   const got = await call('GET', `${repo}/contents/${file.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(sha)}`);
   if (got.status === 404) return { content: '' };
@@ -518,18 +519,18 @@ async function readContent(call, target, sha, file) {
   if (problem) return problem;
   let body = {};
   try { body = JSON.parse(got.text); } catch { return { dead: true, status: got.status }; }
-  if (typeof body.content !== 'string') return { content: '' };
-  return { content: Buffer.from(body.content.replace(/\s/g, ''), 'base64').toString('utf8') };
+  if (typeof (body as Wire).content !== 'string') return { content: '' };
+  return { content: Buffer.from((body as Wire).content.replace(/\s/g, ''), 'base64').toString('utf8') };
 }
 
-export async function reviewPullRequest({ target, number, sha, files, githubApi, available, run, repoDir, checkout }) {
-  let session = null;
+export async function reviewPullRequest({ target, number, sha, files, githubApi, available, run, repoDir, checkout }: Wire): Promise<Wire> {
+  let session: Wire = null;
   let list = files;
   let createdTree = null;
   let tree = repoDir ?? null;
   let treeMiss = false;
-  const project = (file) => languageOf(file.path) === 'typescript' || languageOf(file.path) === 'rust';
-  async function ensureTree() {
+  const project = (file: Wire) => languageOf(file.path) === 'typescript' || languageOf(file.path) === 'rust';
+  async function ensureTree(): Promise<Wire> {
     if (tree) return tree;
     if (treeMiss || dryRun()) return null;
     if (!session?.token) {
@@ -563,7 +564,7 @@ export async function reviewPullRequest({ target, number, sha, files, githubApi,
       if (dryRun()) return { published: false, finding: null };
       session = await openGithub(target, githubApi);
       if (session.missing || session.retry || session.dead) return session;
-      const loaded = await loadPullFile(session.call, target, number);
+      const loaded: Wire = await loadPullFile(session.call, target, number);
       if (loaded.retry || loaded.dead) return loaded;
       list = loaded.files ?? [];
     }

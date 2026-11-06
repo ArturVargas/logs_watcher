@@ -1,9 +1,10 @@
+import type { Wire } from '../src/types.js';
 import pg from 'pg';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaSql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../sql/schema.sql'), 'utf8');
+const schemaSql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../sql/schema.sql'), 'utf8');
 
 export async function openTestDb() {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -32,8 +33,8 @@ export async function openTestDb() {
   };
 }
 
-export function listen(server) {
-  return new Promise((resolve, reject) => {
+export function listen(server: Wire) {
+  return new Promise((resolve: Wire, reject: Wire) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve(server.address().port));
   });

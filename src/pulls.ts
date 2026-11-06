@@ -1,3 +1,4 @@
+import type { Wire } from './types.js';
 import { eligible } from './classify.js';
 import { dryRun } from './config.js';
 import { changedPaths, docsDiffText, docsKey, docsPrompt, docsStop, planDocs, promptFile, reviewDocs } from './docs.js';
@@ -16,10 +17,10 @@ const COPY = {
     approval: 'Aprobación',
     approvalLine: 'Esta clase exige una persona. La regla general está en la sección Fusión automática.',
     sources: 'Fuentes',
-    severityLines: (severity, priority, issue) => `- Clase: ${severity}\n- Prioridad: ${priority}${issue}`,
-    sentry: (url) => `- Sentry: ${url}`,
-    event: (id) => `- Evento: ${id}`,
-    progress: (url) => `- Estado del fix: propuesta-abierta\n- Pull request: ${url}`,
+    severityLines: (severity: Wire, priority: Wire, issue: Wire) => `- Clase: ${severity}\n- Prioridad: ${priority}${issue}`,
+    sentry: (url: Wire) => `- Sentry: ${url}`,
+    event: (id: Wire) => `- Evento: ${id}`,
+    progress: (url: Wire) => `- Estado del fix: propuesta-abierta\n- Pull request: ${url}`,
   },
   en: {
     changes: 'What changes',
@@ -29,33 +30,33 @@ const COPY = {
     approval: 'Approval',
     approvalLine: 'This class needs a person. The general rule is in the Automatic merge section.',
     sources: 'Sources',
-    severityLines: (severity, priority, issue) => `- Class: ${severity}\n- Priority: ${priority}${issue}`,
-    sentry: (url) => `- Sentry: ${url}`,
-    event: (id) => `- Event: ${id}`,
-    progress: (url) => `- Fix state: propuesta-abierta\n- Pull request: ${url}`,
+    severityLines: (severity: Wire, priority: Wire, issue: Wire) => `- Class: ${severity}\n- Priority: ${priority}${issue}`,
+    sentry: (url: Wire) => `- Sentry: ${url}`,
+    event: (id: Wire) => `- Event: ${id}`,
+    progress: (url: Wire) => `- Fix state: propuesta-abierta\n- Pull request: ${url}`,
   },
 };
 
-function readJson(res) {
+function readJson(res: Wire): Wire {
   try { return JSON.parse(res.text); } catch { return null; }
 }
 
-function refName(branch) {
+function refName(branch: Wire): Wire {
   return `heads/${branch}`.split('/').map(encodeURIComponent).join('/');
 }
 
-function isTestPath(path) {
+function isTestPath(path: Wire): Wire {
   return path === 'tests' || path === '__tests__' || /(^|\/)(tests|__tests__)(\/|$)/.test(path) || TEST_FILE.test(path);
 }
 
-function replaceOnce(original, before, after) {
+function replaceOnce(original: Wire, before: Wire, after: Wire): Wire {
   if (typeof before !== 'string' || before === '' || typeof after !== 'string') return null;
   const at = original.indexOf(before);
   if (at < 0 || original.indexOf(before, at + before.length) !== -1) return null;
   return original.slice(0, at) + after + original.slice(at + before.length);
 }
 
-function payloadOk(payload) {
+function payloadOk(payload: Wire): Wire {
   if (!payload || !Array.isArray(payload.patches) || payload.patches.length < 1) return false;
   for (const patch of payload.patches) {
     if (!patch || pathDenied(patch.path) || typeof patch.before !== 'string' || typeof patch.after !== 'string') return false;
@@ -66,14 +67,14 @@ function payloadOk(payload) {
   return true;
 }
 
-function commitText(summary, sentryIssueId, issue) {
+function commitText(summary: Wire, sentryIssueId: Wire, issue: Wire): Wire {
   const title = scrub(`fix: ${summary ?? ''}`).replace(/[\r\n]+/g, ' ').trim().slice(0, 256) || 'fix';
   const lines = [title, '', `Sentry-Issue: ${scrub(String(sentryIssueId))}`];
   if (Number.isInteger(issue)) lines.push(`GitHub-Issue: ${issue}`);
   return { title, message: scrub(`${lines.join('\n')}\n`) };
 }
 
-function sentryUrl(target, id) {
+function sentryUrl(target: Wire, id: Wire): Wire {
   const marker = scrub(String(id)).replaceAll('"', '');
   return scrub(`${target.sentry.baseUrl.replace(/\/$/, '')}/organizations/${target.sentry.org}/issues/${marker}/`);
 }
@@ -83,11 +84,11 @@ const DOCS_STATUS = {
   en: { none: 'no impact', updated: 'updated in this pull request', pending: 'pending' },
 };
 
-function pullBody(language, input, hex, docsStatus) {
-  const copy = COPY[language];
+function pullBody(language: Wire, input: Wire, hex: Wire, docsStatus: Wire): Wire {
+  const copy = (COPY as Wire)[language];
   const issue = Number.isInteger(input.githubIssueNumber) ? `\n- Issue: #${input.githubIssueNumber}` : '';
   const priority = input.payload.priority || (language === 'en' ? 'no priority' : 'sin prioridad');
-  const quotes = (input.payload.evidence ?? []).map((item) => `- ${scrub(item.quote ?? '')}`).join('\n');
+  const quotes = (input.payload.evidence ?? []).map((item: Wire) => `- ${scrub(item.quote ?? '')}`).join('\n');
   return scrub([
     `<!-- logs-watcher-proposal: ${input.proposalId} -->`,
     `<!-- logs-watcher-generation: ${hex} -->`,
@@ -106,7 +107,7 @@ function pullBody(language, input, hex, docsStatus) {
     '',
     `## ${copy.docs}`,
     '',
-    DOCS_STATUS[language][docsStatus] || DOCS_STATUS[language].none,
+    (DOCS_STATUS as Wire)[language][docsStatus] || (DOCS_STATUS as Wire)[language].none,
     '',
     `## ${copy.approval}`,
     '',
@@ -122,14 +123,14 @@ function pullBody(language, input, hex, docsStatus) {
   ].join('\n'));
 }
 
-function replaceProgress(body, inner) {
+function replaceProgress(body: Wire, inner: Wire): Wire {
   const matches = [...String(body).matchAll(/<!-- logs-watcher-progress:start -->\n([\s\S]*?)\n<!-- logs-watcher-progress:end -->/g)];
   if (matches.length !== 1) return null;
-  const block = `<!-- logs-watcher-progress:start -->\n${matches[0][1]}\n<!-- logs-watcher-progress:end -->`;
+  const block = `<!-- logs-watcher-progress:start -->\n${matches[0]![1]!}\n<!-- logs-watcher-progress:end -->`;
   return String(body).replace(block, `<!-- logs-watcher-progress:start -->\n${inner}\n<!-- logs-watcher-progress:end -->`);
 }
 
-async function languageOf(pool, input) {
+async function languageOf(pool: Wire, input: Wire): Promise<Wire> {
   const stored = (await pool.query(
     `SELECT issue_language FROM groups WHERE target_id = $1 AND sentry_issue_id = $2`,
     [input.target.id, input.sentryIssueId],
@@ -137,7 +138,7 @@ async function languageOf(pool, input) {
   return stored === 'en' ? 'en' : 'es';
 }
 
-async function baseTree(call, repo) {
+async function baseTree(call: Wire, repo: Wire): Promise<Wire> {
   const info = await call('GET', repo);
   const infoProblem = failure(info);
   if (infoProblem) return { problem: infoProblem };
@@ -162,16 +163,16 @@ async function baseTree(call, repo) {
   return { name, sha, treeSha, entries: treeBody.tree ?? [], truncated: treeBody.truncated === true };
 }
 
-function layoutGate(entries, payload, truncated) {
+function layoutGate(entries: Wire, payload: Wire, truncated: Wire): Wire {
   // shortcut: a truncated tree skips the test-layout gate; page the tree when a repository exceeds one response.
   if (truncated) return { testsMissing: false };
-  const layout = entries.some((item) => isTestPath(item.path || ''));
-  const addsTest = (payload.newTests ?? []).some((file) => isTestPath(file.path));
+  const layout = entries.some((item: Wire) => isTestPath(item.path || ''));
+  const addsTest = (payload.newTests ?? []).some((file: Wire) => isTestPath(file.path));
   if (layout && !addsTest) return { blocked: true };
   return { testsMissing: !layout && !addsTest };
 }
 
-async function readContents(call, repo, sha, filePath) {
+async function readContents(call: Wire, repo: Wire, sha: Wire, filePath: Wire): Promise<Wire> {
   const res = await call('GET', `${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(sha)}`);
   if (res.status === 404) return { missing: true };
   const problem = failure(res);
@@ -182,7 +183,7 @@ async function readContents(call, repo, sha, filePath) {
   return { text: Buffer.from(body.content.replace(/\s/g, ''), 'base64').toString('utf8') };
 }
 
-async function changedFiles(call, repo, sha, payload) {
+async function changedFiles(call: Wire, repo: Wire, sha: Wire, payload: Wire): Promise<Wire> {
   const files = new Map();
   for (const patch of payload.patches) {
     let text = files.get(patch.path);
@@ -199,10 +200,10 @@ async function changedFiles(call, repo, sha, payload) {
   return { files };
 }
 
-async function publish(call, repo, { branch, message, baseSha, treeSha, payload }) {
+async function publish(call: Wire, repo: Wire, { branch, message, baseSha, treeSha, payload }: Wire): Promise<Wire> {
   const changed = await changedFiles(call, repo, baseSha, payload);
   if (changed.problem || changed.missing) return changed;
-  const tree = [];
+  const tree: Wire[] = [] as Wire[];
   for (const [path, content] of changed.files) {
     const blob = await call('POST', `${repo}/git/blobs`, { content, encoding: 'utf-8' });
     const blobProblem = failure(blob);
@@ -228,16 +229,16 @@ async function publish(call, repo, { branch, message, baseSha, treeSha, payload 
   return { headSha, treeSha: nextTree };
 }
 
-async function listPull(call, repo, owner, branch) {
+async function listPull(call: Wire, repo: Wire, owner: Wire, branch: Wire): Promise<Wire> {
   const res = await call('GET', `${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=all&per_page=20`);
   const problem = failure(res);
   if (problem) return { problem };
   const items = readJson(res);
   if (!Array.isArray(items)) return { problem: { dead: true, status: res.status } };
-  return { pull: items.find((item) => item?.head?.ref === branch) ?? null };
+  return { pull: items.find((item: Wire) => item?.head?.ref === branch) ?? null };
 }
 
-async function createPull(call, repo, { title, branch, base, body }) {
+async function createPull(call: Wire, repo: Wire, { title, branch, base, body }: Wire): Promise<Wire> {
   const res = await call('POST', `${repo}/pulls`, { title, head: branch, base, body });
   if (res.status === 422) return { exists: true };
   const problem = failure(res);
@@ -247,7 +248,7 @@ async function createPull(call, repo, { title, branch, base, body }) {
   return { pull };
 }
 
-async function addTestsMissing(call, repo, number) {
+async function addTestsMissing(call: Wire, repo: Wire, number: Wire): Promise<Wire> {
   const made = await call('POST', `${repo}/labels`, { name: 'tests:missing', color: 'a16207' });
   if (made.status !== 422) {
     const problem = failure(made);
@@ -257,14 +258,14 @@ async function addTestsMissing(call, repo, number) {
   return failure(res);
 }
 
-async function noteOpen(call, repo, input, language, url) {
+async function noteOpen(call: Wire, repo: Wire, input: Wire, language: Wire, url: Wire): Promise<Wire> {
   if (!Number.isInteger(input.githubIssueNumber)) return null;
   const got = await call('GET', `${repo}/issues/${input.githubIssueNumber}`);
   const problem = failure(got);
   if (problem) return problem;
   const issue = readJson(got);
   if (!issue) return { dead: true, status: got.status };
-  const inner = COPY[language].progress(scrub(url));
+  const inner = (COPY as Wire)[language].progress(scrub(url));
   const body = replaceProgress(issue.body || '', inner);
   if (body == null) {
     log({ msg: 'progress_stale', jobId: input.job.id, kind: input.job.kind, sentryIssueId: input.sentryIssueId, githubIssue: input.githubIssueNumber });
@@ -275,8 +276,8 @@ async function noteOpen(call, repo, input, language, url) {
   return failure(patched);
 }
 
-async function commitOnto(call, repo, { branch, parentSha, treeSha, files }) {
-  const tree = [];
+async function commitOnto(call: Wire, repo: Wire, { branch, parentSha, treeSha, files }: Wire): Promise<Wire> {
+  const tree: Wire[] = [] as Wire[];
   for (const file of files) {
     const blob = await call('POST', `${repo}/git/blobs`, { content: file.content, encoding: 'utf-8' });
     const blobProblem = failure(blob);
@@ -301,11 +302,11 @@ async function commitOnto(call, repo, { branch, parentSha, treeSha, files }) {
   return { headSha };
 }
 
-function traced(input, msg) {
+function traced(input: Wire, msg: Wire): Wire {
   log({ msg, jobId: input.job.id, kind: input.job.kind, sentryIssueId: input.sentryIssueId });
 }
 
-async function storePendingDocs(pool, input, headSha, paths, baseSha, model) {
+async function storePendingDocs(pool: Wire, input: Wire, headSha: Wire, paths: Wire, baseSha: Wire, model: Wire): Promise<Wire> {
   let payload = { dryRun: false };
   try {
     payload = JSON.parse(scrub(JSON.stringify({
@@ -324,7 +325,7 @@ async function storePendingDocs(pool, input, headSha, paths, baseSha, model) {
   );
 }
 
-async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, entries, baseSha }) {
+async function driftFix(pool: Wire, input: Wire, call: Wire, repo: Wire, { branch, headSha, treeSha, entries, baseSha }: Wire): Promise<Wire> {
   const paths = changedPaths(input.payload);
   const early = docsStop(paths);
   if (early === 'too_large') {
@@ -335,7 +336,7 @@ async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, ent
   }
   if (early === 'markdown') return { status: 'none' };
   // shortcut: a truncated tree can miss docs candidates; page the tree when a repository exceeds one response.
-  const docPaths = entries.filter((item) => item?.type !== 'tree' && String(item?.path || '').startsWith('docs/')).map((item) => item.path);
+  const docPaths = entries.filter((item: Wire) => item?.type !== 'tree' && String(item?.path || '').startsWith('docs/')).map((item: Wire) => item.path);
   if (!docPaths.length) return { status: 'none' };
   const map = await readContents(call, repo, headSha, 'docs/map.yml');
   if (map.problem) return map.problem;
@@ -345,7 +346,7 @@ async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, ent
     docPaths,
     patches: input.payload.patches,
     newTests: input.payload.newTests,
-    read: (filePath) => readContents(call, repo, headSha, filePath).then((loaded) => {
+    read: (filePath: Wire) => readContents(call, repo, headSha, filePath).then((loaded: Wire) => {
       if (loaded.problem || loaded.missing) return loaded;
       return { text: loaded.text };
     }),
@@ -357,9 +358,9 @@ async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, ent
   const key = docsKey(input.target.id, input.sentryIssueId, headSha, paths);
   const prior = await pool.query(`SELECT state FROM proposals WHERE generation_key = $1`, [key]);
   if (prior.rowCount) return { status: 'pending' };
-  const files = [];
+  const files: Wire[] = [] as Wire[];
   for (const filePath of plan.candidates) {
-    const loaded = await readContents(call, repo, headSha, filePath);
+    const loaded: Wire = await readContents(call, repo, headSha, filePath);
     if (loaded.problem) return loaded.problem;
     if (loaded.missing || typeof loaded.text !== 'string') continue;
     files.push({ path: filePath, ...promptFile(loaded.text) });
@@ -378,13 +379,13 @@ async function driftFix(pool, input, call, repo, { branch, headSha, treeSha, ent
     await storePendingDocs(pool, input, headSha, paths, baseSha, asked.parsed);
     return { status: 'pending' };
   }
-  if (!reviewed.files.length) return { status: 'none' };
-  const committed = await commitOnto(call, repo, { branch, parentSha: headSha, treeSha, files: reviewed.files });
+  if (!(reviewed as Wire).files.length) return { status: 'none' };
+  const committed = await commitOnto(call, repo, { branch, parentSha: headSha, treeSha, files: (reviewed as Wire).files });
   if (committed.problem) return committed.problem;
   return { status: 'updated', headSha: committed.headSha };
 }
 
-async function finish(pool, input, call, repo, pull, headSha, testsMissing, language) {
+async function finish(pool: Wire, input: Wire, call: Wire, repo: Wire, pull: Wire, headSha: Wire, testsMissing: Wire, language: Wire): Promise<Wire> {
   const number = pull.number;
   const url = pull.html_url || `https://github.com/${input.target.github.owner}/${input.target.github.name}/pull/${number}`;
   if (input.prNumber == null) {
@@ -403,7 +404,7 @@ async function finish(pool, input, call, repo, pull, headSha, testsMissing, lang
   return { number };
 }
 
-export async function openFixPull(pool, input) {
+export async function openFixPull(pool: Wire, input: Wire): Promise<Wire> {
   if (dryRun() || !eligible(input.payload?.class)) return { number: null };
   const hex = /^fix:([0-9a-f]{64})$/.exec(input.generationKey)?.[1];
   if (!hex || !payloadOk(input.payload) || !/^[A-Za-z0-9._-]+$/.test(String(input.sentryIssueId))) return { number: null };
@@ -414,7 +415,7 @@ export async function openFixPull(pool, input) {
     );
     if (prior.rowCount) return { number: null };
   }
-  const session = await openGithub(input.target, input.api);
+  const session: Wire = await openGithub(input.target, input.api);
   if (session.missing) return { number: null };
   if (session.retry || session.dead) return session;
   const call = session.call;
