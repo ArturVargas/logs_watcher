@@ -1,3 +1,4 @@
+import type { Wire } from './types.js';
 import { createHash, createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dryRun } from './config.js';
@@ -41,16 +42,16 @@ const COPY = {
     severity: 'Severidad',
     sources: 'Fuentes',
     progressHeading: '',
-    doesLine: (type, culprit, level, handled) => `Excepción ${type} en ${culprit}. El nivel que envía Sentry es ${level}. El mecanismo handled es ${handled}.`,
+    doesLine: (type: Wire, culprit: Wire, level: Wire, handled: Wire) => `Excepción ${type} en ${culprit}. El nivel que envía Sentry es ${level}. El mecanismo handled es ${handled}.`,
     affectsLine: 'El alcance para el usuario es la clase de severidad de abajo. Rutas, conteos y frecuencia están en el bloque de hechos.',
-    facts: (v) => `- Release: ${v.release}\n- Entorno: ${v.environment}\n- Rutas afectadas: ${v.routes}\n- Usuarios afectados (conteo): ${v.userCount}\n- Frecuencia: ${v.total} en total, ${v.day} en las últimas 24 h según Sentry\n- Evento más reciente: ${v.eventId}`,
-    severityBlock: (severity, priority) => `- Clase: ${severity}\n- Prioridad: ${priority}`,
-    progress: (state) => `- Estado del fix: ${state}`,
-    sentryLine: (url) => `- Sentry: ${url}`,
-    eventLine: (id) => `- Evento: ${id}`,
-    duplicate: (n) => `duplicado de #${n}`,
+    facts: (v: Wire) => `- Release: ${v.release}\n- Entorno: ${v.environment}\n- Rutas afectadas: ${v.routes}\n- Usuarios afectados (conteo): ${v.userCount}\n- Frecuencia: ${v.total} en total, ${v.day} en las últimas 24 h según Sentry\n- Evento más reciente: ${v.eventId}`,
+    severityBlock: (severity: Wire, priority: Wire) => `- Clase: ${severity}\n- Prioridad: ${priority}`,
+    progress: (state: Wire) => `- Estado del fix: ${state}`,
+    sentryLine: (url: Wire) => `- Sentry: ${url}`,
+    eventLine: (id: Wire) => `- Evento: ${id}`,
+    duplicate: (n: Wire) => `duplicado de #${n}`,
     stale: 'Los bloques del issue no se pueden actualizar.',
-    update: (id) => `Evento ${id} actualiza este issue.`,
+    update: (id: Wire) => `Evento ${id} actualiza este issue.`,
   },
   en: {
     untyped: 'Untyped error',
@@ -66,24 +67,24 @@ const COPY = {
     severity: 'Severity',
     sources: 'Sources',
     progressHeading: 'Progress',
-    doesLine: (type, culprit, level, handled) => `Exception ${type} at ${culprit}. The level Sentry sends is ${level}. The handled mechanism is ${handled}.`,
+    doesLine: (type: Wire, culprit: Wire, level: Wire, handled: Wire) => `Exception ${type} at ${culprit}. The level Sentry sends is ${level}. The handled mechanism is ${handled}.`,
     affectsLine: 'User impact is the severity class below. Routes, counts, and frequency are in the facts block.',
-    facts: (v) => `- Release: ${v.release}\n- Environment: ${v.environment}\n- Affected routes: ${v.routes}\n- Affected users (count): ${v.userCount}\n- Frequency: ${v.total} in total, ${v.day} in the last 24 h according to Sentry\n- Most recent event: ${v.eventId}`,
-    severityBlock: (severity, priority) => `- Class: ${severity}\n- Priority: ${priority}`,
-    progress: (state) => `- Fix state: ${state}`,
-    sentryLine: (url) => `- Sentry: ${url}`,
-    eventLine: (id) => `- Event: ${id}`,
-    duplicate: (n) => `duplicate of #${n}`,
+    facts: (v: Wire) => `- Release: ${v.release}\n- Environment: ${v.environment}\n- Affected routes: ${v.routes}\n- Affected users (count): ${v.userCount}\n- Frequency: ${v.total} in total, ${v.day} in the last 24 h according to Sentry\n- Most recent event: ${v.eventId}`,
+    severityBlock: (severity: Wire, priority: Wire) => `- Class: ${severity}\n- Priority: ${priority}`,
+    progress: (state: Wire) => `- Fix state: ${state}`,
+    sentryLine: (url: Wire) => `- Sentry: ${url}`,
+    eventLine: (id: Wire) => `- Event: ${id}`,
+    duplicate: (n: Wire) => `duplicate of #${n}`,
     stale: 'The issue blocks cannot be updated.',
-    update: (id) => `Event ${id} updates this issue.`,
+    update: (id: Wire) => `Event ${id} updates this issue.`,
   },
 };
 
-function plain(text) {
+function plain(text: Wire): Wire {
   return scrub(text).replaceAll('<!--', '< !--').replaceAll('-->', '-- >').replaceAll(/[\r\n]+/g, ' ');
 }
 
-function hits(text, words) {
+function hits(text: Wire, words: Wire): Wire {
   const set = new Set(words);
   let count = 0;
   for (const word of String(text ?? '').toLowerCase().split(/[^a-z']+/)) {
@@ -92,7 +93,7 @@ function hits(text, words) {
   return count;
 }
 
-export function chooseLanguage(setting, stored, text) {
+export function chooseLanguage(setting: Wire, stored: Wire, text: Wire): Wire {
   if (stored === 'es' || stored === 'en') return stored;
   if (setting === 'es' || setting === 'en') return setting;
   const es = hits(text, ES_WORDS);
@@ -102,34 +103,34 @@ export function chooseLanguage(setting, stored, text) {
   return 'es';
 }
 
-function pathname(url) {
+function pathname(url: Wire): Wire {
   if (!url) return '';
   try { return new URL(url, 'http://localhost').pathname; } catch { return ''; }
 }
 
-function framesOf(event) {
-  const frames = [];
+function framesOf(event: Wire): Wire {
+  const frames: Wire[] = [] as Wire[];
   for (const value of event.exception?.values ?? []) {
     for (const frame of value?.stacktrace?.frames ?? []) frames.push(frame);
   }
-  return [...frames.filter((frame) => frame?.inApp), ...frames.filter((frame) => !frame?.inApp)];
+  return [...frames.filter((frame: Wire) => frame?.inApp), ...frames.filter((frame: Wire) => !frame?.inApp)];
 }
 
-function frameKey(frame) {
+function frameKey(frame: Wire): Wire {
   if (!frame) return '';
   return `${frame.filename || ''}\t${frame.function || ''}`;
 }
 
-function stackLine(frame) {
+function stackLine(frame: Wire): Wire {
   const line = frame?.lineNo ?? frame?.lineno ?? frame?.line ?? '';
   return plain(`${frame?.filename || ''}:${line} ${frame?.function || ''}`.trim());
 }
 
-function quotes(event, frame) {
+function quotes(event: Wire, frame: Wire): Wire {
   const value = event.exception?.values?.[0];
   const bits = [event.title, event.culprit, value?.type, String(value?.value ?? '').slice(0, 300), frame ? stackLine(frame) : ''];
   const seen = new Set();
-  const lines = [];
+  const lines: Wire[] = [] as Wire[];
   for (const bit of bits) {
     const text = plain(String(bit ?? '')).replaceAll('\n', ' ');
     if (text.length < 8 || seen.has(text)) continue;
@@ -139,15 +140,15 @@ function quotes(event, frame) {
   return lines.join('\n');
 }
 
-function desiredLabels(severity, priority) {
+function desiredLabels(severity: Wire, priority: Wire): Wire {
   const labels = ['logs-watcher', 'logs-watcher:sentry', `severity:${severity}`];
   if (priority) labels.push(`priority:${String(priority).toLowerCase()}`);
   if (!eligible(severity)) labels.push('auto-fix:no');
   return labels;
 }
 
-function renderIssue(language, fields) {
-  const copy = COPY[language];
+function renderIssue(language: Wire, fields: Wire): Wire {
+  const copy = (COPY as Wire)[language];
   const type = plain(fields.event.exception?.values?.[0]?.type || '');
   const culprit = plain(fields.event.culprit || '') || copy.unknownF;
   const level = plain(fields.event.level || '') || copy.unknownM;
@@ -157,7 +158,7 @@ function renderIssue(language, fields) {
   const top = ordered[0] || null;
   const frame = plain(frameKey(top));
   const stack = ordered.length ? ordered.slice(0, 5).map(stackLine).join('\n') : copy.unavailable;
-  const routes = [];
+  const routes: Wire[] = [] as Wire[];
   const transaction = tag(fields.event, 'transaction');
   const path = pathname(fields.event.request?.url);
   if (transaction) routes.push(plain(String(transaction)));
@@ -226,19 +227,19 @@ function renderIssue(language, fields) {
   return { title, body: lines.join('\n'), facts, severity, evidence, progress, frame, labels: desiredLabels(fields.severity, fields.priority), copy, markerId };
 }
 
-function blockInner(body, name) {
+function blockInner(body: Wire, name: Wire): Wire {
   const matches = [...body.matchAll(new RegExp(`<!-- logs-watcher-${name}:start -->\\n([\\s\\S]*?)\\n<!-- logs-watcher-${name}:end -->`, 'g'))];
   if (matches.length !== 1) return null;
   return matches[0][1];
 }
 
-function writeBlock(body, name, inner) {
+function writeBlock(body: Wire, name: Wire, inner: Wire): Wire {
   const start = `<!-- logs-watcher-${name}:start -->`;
   const end = `<!-- logs-watcher-${name}:end -->`;
   return body.replace(new RegExp(`${start}\\n[\\s\\S]*?\\n${end}`), `${start}\n${inner}\n${end}`);
 }
 
-function nextBody(current, rendered) {
+function nextBody(current: Wire, rendered: Wire): Wire {
   const facts = blockInner(current, 'facts');
   const severity = blockInner(current, 'severity');
   const evidence = blockInner(current, 'evidence');
@@ -246,14 +247,14 @@ function nextBody(current, rendered) {
   if (facts == null || severity == null || evidence == null || progress == null) return null;
   const stored = evidence.match(/<!-- logs-watcher-top-frame: (.*?) -->/);
   const evidenceNext = stored && stored[1] === rendered.frame ? evidence : rendered.evidence;
-  const progressNext = LATER_PROGRESS.some((token) => progress.includes(token)) ? progress : rendered.progress;
+  const progressNext = LATER_PROGRESS.some((token: Wire) => progress.includes(token)) ? progress : rendered.progress;
   let body = writeBlock(current, 'facts', rendered.facts);
   body = writeBlock(body, 'severity', rendered.severity);
   body = writeBlock(body, 'evidence', evidenceNext);
   return writeBlock(body, 'progress', progressNext);
 }
 
-async function gh(api, token, method, path, payload) {
+async function gh(api: Wire, token: Wire, method: Wire, path: Wire, payload?: Wire): Promise<Wire> {
   try {
     const res = await fetch(`${api}${path}`, {
       method,
@@ -265,20 +266,20 @@ async function gh(api, token, method, path, payload) {
         ...(payload ? { 'content-type': 'application/json' } : {}),
       },
       body: payload ? JSON.stringify(payload) : undefined,
-    });
+    } as RequestInit);
     return { status: res.status, text: await res.text(), retryAfter: res.headers.get('retry-after') };
   } catch {
     return { status: 503, text: '', retryAfter: null };
   }
 }
 
-export function failure(res) {
+export function failure(res: Wire): Wire {
   if (res.status === 429 || res.status >= 500) return { retry: true, status: res.status, retryAfter: res.retryAfter };
   if (res.status >= 400) return { dead: true, status: res.status };
   return null;
 }
 
-function appJwt(appId, privateKey) {
+function appJwt(appId: Wire, privateKey: Wire): Wire {
   const now = Math.floor(Date.now() / 1000);
   const head = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
   const body = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 540, iss: String(appId) })).toString('base64url');
@@ -288,7 +289,7 @@ function appJwt(appId, privateKey) {
   return `${data}.${sign.sign(privateKey).toString('base64url')}`;
 }
 
-export async function openGithub(target, apiBase) {
+export async function openGithub(target: Wire, apiBase: Wire): Promise<Wire> {
   if (!target?.active) return { missing: true };
   const installationId = target.github.installationId || process.env.GITHUB_INSTALLATION_ID || '';
   const appId = process.env.GITHUB_APP_ID || '';
@@ -305,7 +306,7 @@ export async function openGithub(target, apiBase) {
   } catch {
     return { missing: true };
   }
-  const api = (apiBase || GITHUB_API).replace(/\/$/, '');
+  const api: Wire = (apiBase || GITHUB_API).replace(/\/$/, '');
   const minted = await gh(api, token, 'POST', `/app/installations/${encodeURIComponent(installationId)}/access_tokens`);
   const mintedFailure = failure(minted);
   if (mintedFailure) return mintedFailure;
@@ -313,10 +314,10 @@ export async function openGithub(target, apiBase) {
   try { mintedBody = JSON.parse(minted.text); } catch { return { dead: true, status: minted.status }; }
   if (!mintedBody.token) return { dead: true, status: minted.status };
   const accessToken = mintedBody.token;
-  return { token: accessToken, call: (method, path, payload) => gh(api, accessToken, method, path, payload) };
+  return { token: accessToken, call: (method: Wire, path: Wire, payload: Wire) => gh(api, accessToken, method, path, payload) };
 }
 
-async function remember(pool, targetId, sentryIssueId, number, language, stale) {
+async function remember(pool: Wire, targetId: Wire, sentryIssueId: Wire, number: Wire, language: Wire, stale: Wire): Promise<Wire> {
   await pool.query(
     `UPDATE groups SET github_issue_number = $3, issue_language = $4, progress_stale = $5, updated_at = now()
      WHERE target_id = $1 AND sentry_issue_id = $2`,
@@ -329,16 +330,16 @@ async function remember(pool, targetId, sentryIssueId, number, language, stale) 
   );
 }
 
-function missing(job, sentryIssueId) {
+function missing(job: Wire, sentryIssueId: Wire): Wire {
   log({ msg: 'config_missing', jobId: job.id, kind: job.kind, sentryIssueId });
   return { number: null };
 }
 
 // shortcut: a crash after GitHub creates the issue and before the number is stored can open a second one until search catches up; the lower number wins.
-export async function fileSentryIssue(pool, input) {
+export async function fileSentryIssue(pool: Wire, input: Wire): Promise<Wire> {
   if (dryRun()) return { number: null };
   const { job, target, sentryIssueId } = input;
-  const session = await openGithub(target, input.api);
+  const session: Wire = await openGithub(target, input.api);
   if (session.missing) return missing(job, sentryIssueId);
   if (session.retry || session.dead) return session;
   const call = session.call;
@@ -369,8 +370,8 @@ export async function fileSentryIssue(pool, input) {
     const problem = failure(found);
     if (problem) return problem;
     const items = (JSON.parse(found.text).items ?? [])
-      .filter((item) => !item.pull_request)
-      .sort((a, b) => a.number - b.number);
+      .filter((item: Wire) => !item.pull_request)
+      .sort((a: Wire, b: Wire) => a.number - b.number);
     if (items.length > 1) {
       for (const extra of items.slice(1)) {
         const commented = await commentOnce(call, repo, extra.number, `logs-watcher-duplicate: ${items[0].number}`, rendered.copy.duplicate(items[0].number));
@@ -397,8 +398,8 @@ export async function fileSentryIssue(pool, input) {
   const body = nextBody(current.body || '', rendered);
   if (body == null) {
     await remember(pool, target.id, sentryIssueId, number, language, true);
-    if (current.state === 'closed') {
-      const opened = await call('PATCH', `${repo}/issues/${number}`, { state: 'open' });
+    if ((current as Wire).state === 'closed') {
+      const opened: Wire = await call('PATCH', `${repo}/issues/${number}`, { state: 'open' });
       const problem = failure(opened);
       if (problem) return problem;
     }
@@ -409,8 +410,8 @@ export async function fileSentryIssue(pool, input) {
     log({ msg: 'progress_stale', jobId: job.id, kind: job.kind, sentryIssueId, githubIssue: number });
     return { number };
   }
-  const patch = { body };
-  if (current.state === 'closed') patch.state = 'open';
+  const patch: Wire = { body };
+  if ((current as Wire).state === 'closed') patch.state = 'open';
   const updated = await call('PATCH', `${repo}/issues/${number}`, patch);
   const problem = failure(updated);
   if (problem) return problem;
@@ -423,9 +424,9 @@ export async function fileSentryIssue(pool, input) {
   return { number };
 }
 
-async function ensureLabels(call, repo, names) {
-  for (const name of names) {
-    const res = await call('POST', `${repo}/labels`, { name, color: LABEL_COLOR[name] });
+async function ensureLabels(call: Wire, repo: Wire, names: Wire): Promise<Wire> {
+  for (const name of [...names] as Wire[]) {
+    const res = await call('POST', `${repo}/labels`, { name, color: (LABEL_COLOR as Wire)[name] });
     if (res.status === 422) continue;
     const problem = failure(res);
     if (problem) return problem;
@@ -433,16 +434,16 @@ async function ensureLabels(call, repo, names) {
   return null;
 }
 
-async function syncLabels(call, repo, number, issue, names) {
-  const have = new Set((issue.labels ?? []).map((label) => label.name));
+async function syncLabels(call: Wire, repo: Wire, number: Wire, issue: Wire, names: Wire): Promise<Wire> {
+  const have = new Set((issue.labels ?? []).map((label: Wire) => label.name));
   const want = new Set(names);
-  for (const name of names) {
+  for (const name of [...names] as Wire[]) {
     if (have.has(name)) continue;
     const res = await call('POST', `${repo}/issues/${number}/labels`, { labels: [name] });
     const problem = failure(res);
     if (problem) return problem;
   }
-  for (const name of have) {
+  for (const name of [...have] as Wire[]) {
     const managed = name.startsWith('severity:') || name.startsWith('priority:') || name === 'auto-fix:no';
     if (!managed || want.has(name)) continue;
     const res = await call('DELETE', `${repo}/issues/${number}/labels/${encodeURIComponent(name)}`);
@@ -455,12 +456,12 @@ async function syncLabels(call, repo, number, issue, names) {
 
 const FIX_COMMENT = new Set(['tests_failed', 'fix_does_not_apply', 'docs_diff_too_large']);
 
-export async function commentFixCode(target, api, issueNumber, code, call) {
+export async function commentFixCode(target: Wire, api: Wire, issueNumber: Wire, code: Wire, call?: Wire): Promise<Wire> {
   if (dryRun()) return null;
   if (!FIX_COMMENT.has(code) || !Number.isInteger(issueNumber)) return null;
-  let github = call;
+  let github: Wire = call;
   if (!github) {
-    const session = await openGithub(target, api);
+    const session: Wire = await openGithub(target, api);
     if (session.missing) return null;
     if (session.retry || session.dead) return session;
     github = session.call;
@@ -470,13 +471,13 @@ export async function commentFixCode(target, api, issueNumber, code, call) {
 }
 
 // shortcut: markers are checked in the oldest 100 comments, page when an issue passes that.
-async function commentOnce(call, repo, number, marker, line) {
+async function commentOnce(call: Wire, repo: Wire, number: Wire, marker: Wire, line: Wire): Promise<Wire> {
   const listed = await call('GET', `${repo}/issues/${number}/comments?per_page=100`);
   const problem = failure(listed);
   if (problem) return problem;
   const comments = JSON.parse(listed.text);
   if (!Array.isArray(comments)) return { dead: true, status: listed.status };
-  if (comments.some((comment) => String(comment.body ?? '').includes(`<!-- ${marker} -->`))) return null;
+  if (comments.some((comment: Wire) => String(comment.body ?? '').includes(`<!-- ${marker} -->`))) return null;
   const posted = await call('POST', `${repo}/issues/${number}/comments`, { body: `<!-- ${marker} -->\n${line}` });
   return failure(posted);
 }

@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
@@ -21,18 +22,18 @@ test('map hits come before file names and symbols, and stop at 15', async () => 
     mapText: MAP,
     docPaths: Object.keys(docs),
     patches: PAY,
-    newTests: [],
-    read: async (filePath) => ({ text: docs[filePath] ?? '' }),
+    newTests: [] as Wire[],
+    read: async (filePath: Wire) => ({ text: (docs as Wire)[filePath] ?? '' }),
   });
   assert.deepEqual(plan.candidates, ['docs/from-map.md', 'docs/billing.md', 'docs/widget.md']);
 
-  const many = Array.from({ length: 16 }, (_, index) => `docs/pay-${String(index).padStart(2, '0')}.md`);
+  const many = Array.from({ length: 16 }, (_: Wire, index: Wire) => `docs/pay-${String(index).padStart(2, '0')}.md`);
   const capped = await planDocs({
     paths: ['src/keep/pay.ts'],
     mapText: null,
     docPaths: many,
     patches: [{ path: 'src/keep/pay.ts', before: 'a', after: 'b' }],
-    newTests: [],
+    newTests: [] as Wire[],
     read: crashRead(),
   });
   assert.equal(capped.candidates.length, 15);
@@ -43,7 +44,7 @@ test('map hits come before file names and symbols, and stop at 15', async () => 
     mapText: 'rules:\n  - paths: ["src/billing/.*"]\n    docs: ["docs/only-glob.md"]\n',
     docPaths: ['docs/only-glob.md'],
     patches: [{ path: 'src/billing/pay.ts', before: 'a', after: 'b' }],
-    newTests: [],
+    newTests: [] as Wire[],
     read: crashRead(),
   });
   assert.equal(missed.stop, 'empty');
@@ -55,7 +56,7 @@ test('an invalid map is ignored and the file name still matches', async () => {
     mapText: 'nope\n',
     docPaths: ['docs/billing.md'],
     patches: [{ path: 'src/billing/pay.ts', before: 'a', after: 'b' }],
-    newTests: [],
+    newTests: [] as Wire[],
     read: crashRead(),
   });
   assert.equal(plan.mapInvalid, true);
@@ -68,24 +69,24 @@ test('markdown-only and more than 100 files do not read docs', async () => {
     paths: ['README.md', 'docs/a.mdx'],
     mapText: 'rules:',
     docPaths: ['docs/a.mdx'],
-    patches: [],
-    newTests: [],
+    patches: [] as Wire[],
+    newTests: [] as Wire[],
     read,
   });
   assert.equal(markdown.stop, 'markdown');
-  const paths = Array.from({ length: 101 }, (_, index) => `src/f${index}.js`);
-  const large = await planDocs({ paths, mapText: null, docPaths: ['docs/a.md'], patches: [], newTests: [], read });
+  const paths = Array.from({ length: 101 }, (_: Wire, index: Wire) => `src/f${index}.js`);
+  const large = await planDocs({ paths, mapText: null, docPaths: ['docs/a.md'], patches: [] as Wire[], newTests: [] as Wire[], read });
   assert.equal(large.stop, 'too_large');
 });
 
 test('more than 200 markdown files and no candidate records the empty corpus', async () => {
-  const docs = (count) => Array.from({ length: count }, (_, index) => `docs/d${String(index).padStart(3, '0')}.md`);
+  const docs = (count: Wire) => Array.from({ length: count }, (_: Wire, index: Wire) => `docs/d${String(index).padStart(3, '0')}.md`);
   const quiet = await planDocs({
     paths: ['src/zz.js'],
     mapText: null,
     docPaths: docs(200),
     patches: [{ path: 'src/zz.js', before: 'a', after: 'b' }],
-    newTests: [],
+    newTests: [] as Wire[],
     read: crashRead(),
   });
   assert.equal(quiet.stop, 'empty');
@@ -95,7 +96,7 @@ test('more than 200 markdown files and no candidate records the empty corpus', a
     mapText: null,
     docPaths: docs(201),
     patches: [{ path: 'src/zz.js', before: 'a', after: 'export function Widget() {}' }],
-    newTests: [],
+    newTests: [] as Wire[],
     read: async () => { reads += 1; return { text: 'nothing' }; },
   });
   assert.equal(empty.stop, 'empty_large');
@@ -103,14 +104,14 @@ test('more than 200 markdown files and no candidate records the empty corpus', a
 });
 
 test('before must be unique and a new heading is added only when it is missing', () => {
-  const diff = docsDiffText({ patches: PAY, newTests: [] });
+  const diff = docsDiffText({ patches: PAY, newTests: [] as Wire[] });
   const file = { path: 'docs/billing.md', text: 'The pay helper returns 1.\n', prompt: 'The pay helper returns 1.\n' };
   const evidence = [{ source: 'diff', quote: 'return 2;' }];
   const twice = reviewDocs({
     noChange: false,
     evidence,
     patches: [{ path: 'docs/billing.md', before: 'returns 1', after: 'returns 2' }],
-    newSections: [],
+    newSections: [] as Wire[],
   }, { files: [{ ...file, text: 'returns 1 and returns 1', prompt: 'returns 1 and returns 1' }], diffText: diff });
   assert.equal(twice.pending, true);
 
@@ -118,21 +119,21 @@ test('before must be unique and a new heading is added only when it is missing',
     noChange: false,
     evidence,
     patches: [{ path: 'src/billing/pay.ts', before: 'return 1;', after: 'return 2;' }],
-    newSections: [],
+    newSections: [] as Wire[],
   }, { files: [file], diffText: diff });
   assert.equal(outside.pending, true);
 
   const kept = reviewDocs({
     noChange: false,
     evidence,
-    patches: [],
+    patches: [] as Wire[],
     newSections: [{ path: 'docs/billing.md', heading: '## Pay', body: 'more' }],
   }, { files: [{ ...file, text: '# Billing\n\n## Pay\n\nold\n' }], diffText: diff });
   assert.deepEqual(kept.files, []);
   const neighbor = reviewDocs({
     noChange: false,
     evidence,
-    patches: [],
+    patches: [] as Wire[],
     newSections: [{ path: 'docs/billing.md', heading: '## Pay', body: 'more' }],
   }, { files: [{ ...file, text: '# Billing\n\n## Payment\n' }], diffText: diff });
   assert.match(neighbor.files[0].content, /^## Pay$/m);
@@ -152,7 +153,7 @@ test('before must be unique and a new heading is added only when it is missing',
     noChange: true,
     evidence,
     patches: [{ path: 'docs/billing.md', before: 'returns 1', after: 'returns 2' }],
-    newSections: [],
+    newSections: [] as Wire[],
   }, { files: [file], diffText: diff });
   assert.equal(refused.pending, true);
 

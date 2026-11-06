@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHmac } from 'node:crypto';
@@ -13,26 +14,26 @@ import { listen, openTestDb } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-cls-'));
 const blockers = ['/', '/login', '/signup', '/auth/callback'];
-const state = { issueStatus: 200, eventStatus: 200, llmBodies: [], llm: () => ({ status: 200, body: {} }) };
-let db;
-let stub;
-let stubUrl;
-let calls;
+const state: Wire = { issueStatus: 200, eventStatus: 200, llmBodies: [] as Wire[], llm: () => ({ status: 200, body: {} }) };
+let db: Wire;
+let stub: Wire;
+let stubUrl: Wire;
+let calls: Wire;
 
-function event(extra = {}) {
+function event(extra: Wire = {}) {
   return {
     type: 'error',
     level: 'error',
     title: 'TypeError: fail',
     environment: 'production',
-    tags: [],
+    tags: [] as Wire[],
     exception: { values: [{ type: 'TypeError', value: 'fail', mechanism: { handled: true, type: 'generic' } }] },
     ...extra,
   };
 }
 
-function options(extra = {}) {
-  return { blockerTransactions: blockers, productionEnvironments: ['production'], ignoreTitlePatterns: [], userCount: 0, eventCount24h: null, ...extra };
+function options(extra: Wire = {}) {
+  return { blockerTransactions: blockers, productionEnvironments: ['production'], ignoreTitlePatterns: [] as Wire[], userCount: 0, eventCount24h: null, ...extra };
 }
 
 const rubric = [
@@ -84,7 +85,7 @@ const rubric = [
   },
 ];
 
-function writeConfig(sentry = {}, limits = {}) {
+function writeConfig(sentry: Wire = {}, limits: Wire = {}) {
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({
     targets: [{
@@ -114,7 +115,7 @@ function writeConfig(sentry = {}, limits = {}) {
   process.env.LOGS_WATCHER_CONFIG = file;
 }
 
-async function enqueue(issueId) {
+async function enqueue(issueId: Wire) {
   await db.pool.query(
     `INSERT INTO jobs (id, kind, dedupe_key, state, run_after, payload)
      VALUES (gen_random_uuid(), 'classify_and_file', $1, 'queued', now(), $2::jsonb)`,
@@ -122,7 +123,7 @@ async function enqueue(issueId) {
   );
 }
 
-function chat(content, status = 200) {
+function chat(content: Wire, status: Wire = 200) {
   return {
     status,
     body: {
@@ -133,11 +134,11 @@ function chat(content, status = 200) {
 }
 
 before(async () => {
-  stub = http.createServer((req, res) => {
+  stub = http.createServer((req: Wire, res: Wire) => {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'POST' && url.pathname === '/chat/completions') {
       let raw = '';
-      req.on('data', (chunk) => { raw += chunk; });
+      req.on('data', (chunk: Wire) => { raw += chunk; });
       req.on('end', () => {
         state.llmBodies.push(raw);
         const out = state.llm(raw);
@@ -161,7 +162,7 @@ before(async () => {
   delete process.env.LOGS_WATCHER_DRY_RUN;
   const real = globalThis.fetch;
   calls = [];
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     calls.push(String(url));
     return real(url, opts);
   };
@@ -190,10 +191,10 @@ test('rubric rows classify in code', () => {
     assert.equal(result.class, row.class, row.name);
     assert.equal(result.priority, row.priority, row.name);
   }
-  const many = classify(rubric[1].event, options({ userCount: 25 }));
+  const many = classify(rubric[1]!.event, options({ userCount: 25 }));
   assert.equal(many.class, 'truncated');
   assert.equal(many.priority, 'P0');
-  const noisy = classify(rubric[4].event, options({ eventCount24h: 200 }));
+  const noisy = classify(rubric[4]!.event, options({ eventCount24h: 200 }));
   assert.equal(noisy.class, 'no-user-impact');
   assert.equal(noisy.priority, 'P2');
   const quiet = classify(event({ user: null, tags: [{ key: 'transaction', value: 'cron.billing' }] }), options());
@@ -216,14 +217,14 @@ test('a worker stores the rubric without a github issue number', async () => {
     await enqueue(String(n));
     await runOnce(db.pool);
     const group = await db.pool.query('SELECT class, priority, github_issue_number, importance, urgency FROM groups WHERE sentry_issue_id = $1', [String(n)]);
-    assert.equal(group.rows[0].class, row.class, row.name);
-    assert.equal(group.rows[0].priority, row.priority, row.name);
-    assert.equal(group.rows[0].github_issue_number, null);
-    assert.equal(group.rows[0].importance, null);
-    assert.equal(group.rows[0].urgency, null);
+    assert.equal(group.rows[0]!.class, row.class, row.name);
+    assert.equal(group.rows[0]!.priority, row.priority, row.name);
+    assert.equal(group.rows[0]!.github_issue_number, null);
+    assert.equal(group.rows[0]!.importance, null);
+    assert.equal(group.rows[0]!.urgency, null);
   }
-  assert.equal(calls.some((url) => url.startsWith('https://api.github.com')), false);
-  assert.equal(calls.some((url) => url.includes('api.typesafe.ai')), false);
+  assert.equal(calls.some((url: Wire) => url.startsWith('https://api.github.com')), false);
+  assert.equal(calls.some((url: Wire) => url.includes('api.typesafe.ai')), false);
 });
 
 test('a 4xx with the process still running does not classify', async () => {
@@ -236,9 +237,9 @@ test('a 4xx with the process still running does not classify', async () => {
   await runOnce(db.pool);
   const job = await db.pool.query(`SELECT state, last_error FROM jobs`);
   const groups = await db.pool.query(`SELECT count(*)::int AS n FROM groups WHERE class IS NOT NULL`);
-  assert.equal(job.rows[0].state, 'done');
-  assert.equal(job.rows[0].last_error, 'handled_4xx');
-  assert.equal(groups.rows[0].n, 0);
+  assert.equal(job.rows[0]!.state, 'done');
+  assert.equal(job.rows[0]!.last_error, 'handled_4xx');
+  assert.equal(groups.rows[0]!.n, 0);
   assert.equal(state.llmBodies.length, 0);
 });
 
@@ -257,9 +258,9 @@ test('a quote that is not in the event is unclassified and stores no proposal', 
   await runOnce(db.pool);
   const group = await db.pool.query(`SELECT class, priority FROM groups`);
   const proposals = await db.pool.query('SELECT count(*)::int AS n FROM proposals');
-  assert.equal(group.rows[0].class, 'unclassified');
-  assert.equal(group.rows[0].priority, null);
-  assert.equal(proposals.rows[0].n, 0);
+  assert.equal(group.rows[0]!.class, 'unclassified');
+  assert.equal(group.rows[0]!.priority, null);
+  assert.equal(proposals.rows[0]!.n, 0);
 });
 
 test('a rejected response_format is retried once and a literal quote fills the class', async () => {
@@ -268,7 +269,7 @@ test('a rejected response_format is retried once and a literal quote fills the c
     title: 'TypeError: boom-quote-value',
     exception: { values: [{ type: 'TypeError', value: 'boom-quote-value' }] },
   });
-  state.llm = (raw) => {
+  state.llm = (raw: Wire) => {
     if (JSON.parse(raw).response_format) return { status: 400, raw: JSON.stringify({ error: 'response_format unsupported' }) };
     const quote = 'TypeError: boom-quote-value';
     return chat({
@@ -282,11 +283,11 @@ test('a rejected response_format is retried once and a literal quote fills the c
   const group = await db.pool.query(`SELECT class, priority FROM groups`);
   const cost = await db.pool.query(`SELECT kind FROM cost_ledger`);
   const proposals = await db.pool.query('SELECT count(*)::int AS n FROM proposals');
-  assert.equal(group.rows[0].class, 'non-blocking');
-  assert.equal(group.rows[0].priority, 'P3');
-  assert.equal(proposals.rows[0].n, 0);
+  assert.equal(group.rows[0]!.class, 'non-blocking');
+  assert.equal(group.rows[0]!.priority, 'P3');
+  assert.equal(proposals.rows[0]!.n, 0);
   assert.equal(cost.rows.length, 1);
-  assert.equal(cost.rows[0].kind, 'classify');
+  assert.equal(cost.rows[0]!.kind, 'classify');
   assert.equal(state.llmBodies.length, 2);
 });
 
@@ -295,18 +296,18 @@ test('an empty org is config_missing and does not call out', async () => {
   await enqueue('org');
   await runOnce(db.pool);
   const job = await db.pool.query(`SELECT state, last_error FROM jobs`);
-  assert.equal(job.rows[0].state, 'done');
-  assert.equal(job.rows[0].last_error, 'config_missing');
+  assert.equal(job.rows[0]!.state, 'done');
+  assert.equal(job.rows[0]!.last_error, 'config_missing');
   assert.equal(calls.length, 0);
 });
 
 test('empty productionEnvironments drops the job without a call', async () => {
-  writeConfig({ productionEnvironments: [] });
+  writeConfig({ productionEnvironments: [] as Wire[] });
   await enqueue('env');
   await runOnce(db.pool);
   const job = await db.pool.query(`SELECT state, last_error FROM jobs`);
-  assert.equal(job.rows[0].state, 'done');
-  assert.equal(job.rows[0].last_error, 'production_environments_empty');
+  assert.equal(job.rows[0]!.state, 'done');
+  assert.equal(job.rows[0]!.last_error, 'production_environments_empty');
   assert.equal(calls.length, 0);
 });
 
@@ -314,8 +315,8 @@ test('a second event while the job is running marks dirty and does not insert an
   const server = createServer(db.pool);
   const port = await listen(server);
   process.env.SENTRY_WEBHOOK_SECRET = 'sentry-secret';
-  const body = (id) => JSON.stringify({ action: 'created', data: { issue: { id } } });
-  const send = (requestId) => {
+  const body = (id: Wire) => JSON.stringify({ action: 'created', data: { issue: { id } } });
+  const send = (requestId: Wire) => {
     const payload = body('77');
     return fetch(`http://127.0.0.1:${port}/webhooks/sentry/primary`, {
       method: 'POST',
@@ -334,8 +335,8 @@ test('a second event while the job is running marks dirty and does not insert an
     assert.equal((await send('b')).status, 200);
     const jobs = await db.pool.query('SELECT count(*)::int AS n FROM jobs');
     const group = await db.pool.query('SELECT dirty FROM groups');
-    assert.equal(jobs.rows[0].n, 1);
-    assert.equal(group.rows[0].dirty, true);
+    assert.equal(jobs.rows[0]!.n, 1);
+    assert.equal(group.rows[0]!.dirty, true);
   } finally {
     server.close();
   }
@@ -364,20 +365,20 @@ test('a daily total above 5 USD defers the model call and still stores a blocker
   await enqueue('budget-model');
   await runOnce(db.pool);
   const deferred = await db.pool.query(`SELECT state FROM jobs WHERE dedupe_key = 'classify:primary:budget-model'`);
-  assert.equal(deferred.rows[0].state, 'deferred_budget');
+  assert.equal(deferred.rows[0]!.state, 'deferred_budget');
   assert.equal(state.llmBodies.length, 0);
 
-  state.event = rubric[0].event;
+  state.event = rubric[0]!.event;
   state.issue = { userCount: 1 };
   await enqueue('budget-blocker');
   await runOnce(db.pool);
   const group = await db.pool.query(`SELECT class, priority, github_issue_number FROM groups WHERE sentry_issue_id = 'budget-blocker'`);
   const job = await db.pool.query(`SELECT state FROM jobs WHERE dedupe_key = 'classify:primary:budget-blocker'`);
-  assert.equal(group.rows[0].class, 'blocker');
-  assert.equal(group.rows[0].priority, 'P0');
-  assert.equal(group.rows[0].github_issue_number, null);
-  assert.equal(job.rows[0].state, 'deferred_budget');
-  assert.equal(calls.some((url) => url.includes('/chat/completions')), false);
+  assert.equal(group.rows[0]!.class, 'blocker');
+  assert.equal(group.rows[0]!.priority, 'P0');
+  assert.equal(group.rows[0]!.github_issue_number, null);
+  assert.equal(job.rows[0]!.state, 'deferred_budget');
+  assert.equal(calls.some((url: Wire) => url.includes('/chat/completions')), false);
 });
 
 test('a token or an email does not leave the process', async () => {
@@ -393,7 +394,7 @@ test('a token or an email does not leave the process', async () => {
     userCanUseApp: { value: true, quote: 'not-in-event-quote' },
     userFlowCompletes: { value: false, quote: 'not-in-event-quote' },
   });
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   try {
@@ -403,10 +404,10 @@ test('a token or an email does not leave the process', async () => {
     console.log = original;
   }
   const stored = await db.pool.query(`SELECT coalesce(string_agg(coalesce(last_error, ''), ','), '') AS jobs FROM jobs`);
-  const blob = `${state.llmBodies.join('\n')}\n${lines.join('\n')}\n${stored.rows[0].jobs}`;
+  const blob = `${state.llmBodies.join('\n')}\n${lines.join('\n')}\n${stored.rows[0]!.jobs}`;
   assert.equal(blob.includes(token), false);
   assert.equal(blob.includes(email), false);
-  assert.match(state.llmBodies[0], /\[redacted\]/);
+  assert.match(state.llmBodies[0]!, /\[redacted\]/);
 });
 
 test('a sentry 503 is queued again and is not claimed before its delay', async () => {
@@ -415,9 +416,9 @@ test('a sentry 503 is queued again and is not claimed before its delay', async (
   await runOnce(db.pool);
   await runOnce(db.pool);
   const job = await db.pool.query(`SELECT state, attempts, run_after FROM jobs`);
-  assert.equal(job.rows[0].state, 'queued');
-  assert.equal(job.rows[0].attempts, 1);
-  assert.ok(new Date(job.rows[0].run_after).getTime() > Date.now());
+  assert.equal(job.rows[0]!.state, 'queued');
+  assert.equal(job.rows[0]!.attempts, 1);
+  assert.ok(new Date(job.rows[0]!.run_after).getTime() > Date.now());
 });
 
 test('a sentry 401 is dead and is not retried', async () => {
@@ -425,7 +426,7 @@ test('a sentry 401 is dead and is not retried', async () => {
   await enqueue('denied');
   await runOnce(db.pool);
   const job = await db.pool.query(`SELECT state, last_error FROM jobs`);
-  assert.equal(job.rows[0].state, 'dead');
-  assert.equal(job.rows[0].last_error, 'http_401');
-  assert.equal(calls.filter((url) => url.includes('/api/0/issues/')).length, 1);
+  assert.equal(job.rows[0]!.state, 'dead');
+  assert.equal(job.rows[0]!.last_error, 'http_401');
+  assert.equal(calls.filter((url: Wire) => url.includes('/api/0/issues/')).length, 1);
 });

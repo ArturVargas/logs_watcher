@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
@@ -9,24 +10,24 @@ import { runOnce } from '../src/worker.js';
 import { listen, openTestDb } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-prop-'));
-const state = { llmBodies: [], model: null };
-let db;
-let stub;
-let stubUrl;
-let calls;
-const repos = [];
+const state: Wire = { llmBodies: [] as Wire[], model: null };
+let db: Wire;
+let stub: Wire;
+let stubUrl: Wire;
+let calls: Wire;
+const repos: Wire[] = [];
 
-function git(cwd, args) {
+function git(cwd: Wire, args: Wire) {
   const result = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'git failed');
 }
 
-function makeRepo(files) {
+function makeRepo(files: Wire) {
   const repo = mkdtempSync(join(tmpdir(), 'lw-repo-'));
   for (const [path, text] of Object.entries(files)) {
     const full = join(repo, path);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, text);
+    writeFileSync(full, String(text));
   }
   git(repo, ['init', '-b', 'main']);
   git(repo, ['add', '-A']);
@@ -37,7 +38,7 @@ function makeRepo(files) {
 
 const SOURCE = 'export function total() {\n  return 1;\n}\n';
 
-function writeConfig(limits = {}) {
+function writeConfig(limits: Wire = {}) {
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({
     targets: [{
@@ -86,13 +87,13 @@ function truncatedEvent() {
   };
 }
 
-function model(patch) {
+function model(patch: Wire) {
   return {
     refusal: 'none',
     summary: 'Return the right total',
     evidence: [{ source: 'event', quote: 'orders broke badly' }],
     patches: [patch],
-    newTests: [],
+    newTests: [] as Wire[],
   };
 }
 
@@ -105,11 +106,11 @@ async function enqueue() {
 }
 
 before(async () => {
-  stub = http.createServer((req, res) => {
+  stub = http.createServer((req: Wire, res: Wire) => {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'POST' && url.pathname === '/chat/completions') {
       let raw = '';
-      req.on('data', (chunk) => { raw += chunk; });
+      req.on('data', (chunk: Wire) => { raw += chunk; });
       req.on('end', () => {
         state.llmBodies.push(raw);
         const body = JSON.stringify({
@@ -135,7 +136,7 @@ before(async () => {
   delete process.env.LOGS_WATCHER_DRY_RUN;
   const real = globalThis.fetch;
   calls = [];
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     calls.push(String(url));
     return real(url, opts);
   };
@@ -187,7 +188,7 @@ test('a repeated before, package.json, or an empty catch stores nothing pending'
   state.model = model({ path: 'src/orders.js', before: 'return 1;', after: 'return 2;' });
   await enqueue();
   await runOnce(db.pool, { repoDir: repeated });
-  assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
+  assert.equal((await proposals()).rows.filter((row: Wire) => row.state === 'pending').length, 0);
 
   await db.reset();
   state.llmBodies = [];
@@ -195,7 +196,7 @@ test('a repeated before, package.json, or an empty catch stores nothing pending'
   state.model = model({ path: 'package.json', before: 'return 1;', after: 'return 2;' });
   await enqueue();
   await runOnce(db.pool, { repoDir: denied });
-  assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
+  assert.equal((await proposals()).rows.filter((row: Wire) => row.state === 'pending').length, 0);
 
   await db.reset();
   state.llmBodies = [];
@@ -203,7 +204,7 @@ test('a repeated before, package.json, or an empty catch stores nothing pending'
   state.model = model({ path: 'src/orders.js', before: 'return 1;', after: 'try {\n  return 1;\n} catch (e) {}\n' });
   await enqueue();
   await runOnce(db.pool, { repoDir: caught });
-  assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
+  assert.equal((await proposals()).rows.filter((row: Wire) => row.state === 'pending').length, 0);
 });
 
 test('a catch written inside a string still stores the proposal', async () => {
@@ -223,7 +224,7 @@ test('a failed git apply stores nothing pending', async () => {
   state.model = model({ path: 'src/orders.js', before: 'return 9;', after: 'return 2;' });
   await enqueue();
   await runOnce(db.pool, { repoDir: repo });
-  assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
+  assert.equal((await proposals()).rows.filter((row: Wire) => row.state === 'pending').length, 0);
 });
 
 test('non-blocking stores no proposal', async () => {
@@ -247,7 +248,7 @@ test('non-blocking stores no proposal', async () => {
 
 test('a valid truncated patch is stored and github is not called', async () => {
   const repo = makeRepo({ 'src/orders.js': SOURCE });
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   try {
@@ -268,11 +269,11 @@ test('a valid truncated patch is stored and github is not called', async () => {
   assert.equal(rows.rows[0].github_pr_number, null);
   assert.match(rows.rows[0].generation_key, /^fix:[0-9a-f]{64}$/);
   assert.equal(rows.rows[0].payload.dryRun, false);
-  assert.equal(calls.some((url) => url.startsWith('https://api.github.com')), false);
+  assert.equal(calls.some((url: Wire) => url.startsWith('https://api.github.com')), false);
   assert.match(lines.join('\n'), /proposal_stored/);
   assert.equal(lines.join('\n').includes('return 2;'), false);
   const cost = await db.pool.query(`SELECT kind FROM cost_ledger ORDER BY kind`);
-  assert.deepEqual(cost.rows.map((row) => row.kind), ['propose', 'specialist', 'specialist']);
+  assert.deepEqual(cost.rows.map((row: Wire) => row.kind), ['propose', 'specialist', 'specialist']);
   assert.deepEqual(rows.rows[0].payload.specialists.selected, ['business', 'tests']);
   assert.equal(rows.rows[0].payload.specialists.docs, 'drift');
   assert.equal(cost.rows[0].kind, 'propose');
@@ -287,7 +288,7 @@ test('a missing dry-run flag stores payload.dryRun true and does not call github
   assert.equal(rows.rowCount, 1);
   assert.equal(rows.rows[0].payload.dryRun, true);
   assert.equal(rows.rows[0].github_pr_number, null);
-  assert.equal(calls.some((url) => url.startsWith('https://api.github.com')), false);
+  assert.equal(calls.some((url: Wire) => url.startsWith('https://api.github.com')), false);
 });
 
 test('the daily cap stops the second model call', async () => {
@@ -308,12 +309,12 @@ test('a change over the line cap stores nothing pending', async () => {
   state.model = model({ path: 'src/orders.js', before: 'return 1;', after: 'return 2;\nreturn 3;' });
   await enqueue();
   await runOnce(db.pool, { repoDir: repo });
-  assert.equal((await proposals()).rows.filter((row) => row.state === 'pending').length, 0);
+  assert.equal((await proposals()).rows.filter((row: Wire) => row.state === 'pending').length, 0);
 });
 
 test('src does not call typesafe, merge a pull, or a log drain', () => {
-  const files = readdirSync('src').filter((name) => name.endsWith('.js'));
-  const text = files.map((name) => readFileSync(join('src', name), 'utf8')).join('\n');
+  const files = readdirSync('src').filter((name: Wire) => name.endsWith('.ts'));
+  const text = files.map((name: Wire) => readFileSync(join('src', name), 'utf8')).join('\n');
   assert.equal(text.includes('api.typesafe.ai'), false);
   assert.equal(text.includes('webhooks/logs'), false);
   assert.equal(text.includes('/merge'), false);

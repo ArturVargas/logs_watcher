@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -8,11 +9,11 @@ import { createServer } from '../src/main.js';
 import { listen, openTestDb } from './db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-http-'));
-let db;
-let port;
-const serverState = {};
+let db: Wire;
+let port: number = 0;
+const serverState: Wire = { server: null };
 
-function config(target) {
+function config(target: Wire) {
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({ targets: [target], limits: { dailyBudgetUsd: 5 } }));
   process.env.LOGS_WATCHER_CONFIG = file;
@@ -26,11 +27,11 @@ function activeTarget() {
   });
 }
 
-function sign(body, secret) {
+function sign(body: Wire, secret: Wire) {
   return createHmac('sha256', secret).update(body).digest('hex');
 }
 
-async function post(path, body, headers) {
+async function post(path: Wire, body: Wire, headers: Wire) {
   return fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers, body });
 }
 
@@ -40,7 +41,7 @@ before(async () => {
   process.env.GITHUB_WEBHOOK_SECRET = 'github-secret';
   activeTarget();
   serverState.server = createServer(db.pool);
-  port = await listen(serverState.server);
+  port = Number(await listen(serverState.server));
 });
 
 beforeEach(async () => {
@@ -54,12 +55,12 @@ after(async () => {
 });
 
 test('a bad signature inserts nothing', async () => {
-  const lines = [];
+  const lines: Wire[] = [];
   const original = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   const real = globalThis.fetch;
-  const calls = [];
-  globalThis.fetch = async (url, opts) => {
+  const calls: Wire[] = [];
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     calls.push(String(url));
     return real(url, opts);
   };
@@ -81,7 +82,7 @@ test('a bad signature inserts nothing', async () => {
     assert.equal(github.status, 401);
     const inbox = await db.pool.query('SELECT count(*)::int AS n FROM inbox');
     assert.equal(inbox.rows[0].n, 0);
-    assert.equal(calls.filter((url) => !url.startsWith('http://127.0.0.1:')).length, 0);
+    assert.equal(calls.filter((url: Wire) => !url.startsWith('http://127.0.0.1:')).length, 0);
     const logged = lines.join('\n');
     assert.match(logged, /webhook_rejected/);
     assert.equal(logged.includes('deadbeef'), false);
@@ -195,7 +196,7 @@ test('there is no log-drain route', async () => {
   assert.equal(res.status, 404);
 });
 
-function githubEvent(body, delivery, event = 'pull_request') {
+function githubEvent(body: Wire, delivery: Wire, event: Wire = 'pull_request') {
   const raw = JSON.stringify(body);
   return post('/webhooks/github', raw, {
     'content-type': 'application/json',
@@ -205,7 +206,7 @@ function githubEvent(body, delivery, event = 'pull_request') {
   });
 }
 
-function pull(action, sha, repository = { name: 'app', owner: { login: 'acme' } }) {
+function pull(action: Wire, sha: Wire, repository: Wire = { name: 'app', owner: { login: 'acme' } }) {
   return { action, pull_request: { number: 7, head: { sha } }, repository };
 }
 
@@ -219,8 +220,8 @@ test('opened, synchronize, and reopened each enqueue one review job', async () =
     assert.equal((await githubEvent(pull(action, sha), delivery)).status, 200);
   }
   const jobs = await db.pool.query(`SELECT kind, dedupe_key FROM jobs ORDER BY dedupe_key`);
-  assert.deepEqual(jobs.rows.map((row) => row.kind), ['review_pr', 'review_pr', 'review_pr']);
-  assert.equal(new Set(jobs.rows.map((row) => row.dedupe_key)).size, 3);
+  assert.deepEqual(jobs.rows.map((row: Wire) => row.kind), ['review_pr', 'review_pr', 'review_pr']);
+  assert.equal(new Set(jobs.rows.map((row: Wire) => row.dedupe_key)).size, 3);
 });
 
 test('a repeated pull request sha stores two deliveries and one job', async () => {

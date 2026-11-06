@@ -1,9 +1,10 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DEFAULT_RULES, acceptSpecialist, rulesFor, runSpecialists, scriptKind, securityRelevant, selectSpecialists } from '../src/specialists.js';
 
-const patch = (path, after = 'return 2;', before = 'return 1;') => ({ path, before, after });
-const select = (paths, extra = {}) => selectSpecialists({ class: 'blocker', patches: paths.map((p) => patch(p)), ...extra });
+const patch = (path: Wire, after = 'return 2;', before = 'return 1;') => ({ path, before, after });
+const select = (paths: Wire, extra = {}) => selectSpecialists({ class: 'blocker', patches: paths.map((p: Wire) => patch(p)), ...extra });
 
 test('typescript server vs ui is decided by path, server wins', () => {
   assert.equal(scriptKind('src/components/Cart.tsx'), 'ui');
@@ -26,7 +27,7 @@ test('selection follows ADR-0028 order and runs each role once', () => {
   assert.deepEqual(select(['src/api/a.ts', 'src/components/B.tsx', 'src/api/c.ts']),
     ['typescript-backend', 'typescript-frontend', 'business', 'tests']);
   assert.deepEqual(select(['src/lib/format.ts']), ['business', 'tests']);
-  assert.deepEqual(selectSpecialists({ class: 'blocker', patches: [] }), []);
+  assert.deepEqual(selectSpecialists({ class: 'blocker', patches: [] as Wire[] }), []);
   assert.deepEqual(selectSpecialists({ patches: [patch('src/lib/a.ts')] }), ['tests']);
 });
 
@@ -58,16 +59,16 @@ test('only literal evidence of 8+ chars survives; extra fields are dropped', () 
   );
   assert.equal(acceptSpecialist({ evidence: [{ source: 'diff', quote: 'short' }], summary: 'ok' }, diff, []), null);
   assert.equal(acceptSpecialist({ evidence: [{ source: 'diff', quote: 'not in the diff' }], summary: 'ok' }, diff, []), null);
-  assert.equal(acceptSpecialist({ evidence: [], summary: 'ok' }, diff, []), null);
-  assert.equal(acceptSpecialist({ evidence: [{ source: 'doc', quote: 'Checkout rules' }], summary: 'x' }, diff, [{ path: 'docs/a.md', text: 'Checkout rules apply' }]).summary, 'x');
+  assert.equal(acceptSpecialist({ evidence: [] as Wire[], summary: 'ok' }, diff, []), null);
+  assert.equal(acceptSpecialist({ evidence: [{ source: 'doc', quote: 'Checkout rules' }], summary: 'x' }, diff, [{ path: 'docs/a.md', text: 'Checkout rules apply' }])!.summary, 'x');
 });
 
 test('runSpecialists calls a mocked model once per role and stops at the budget cap', async () => {
   const payload = { class: 'blocker', patches: [patch('src/api/session.ts', 'return verifySession(token);')] };
-  const asked = [];
+  const asked: Wire[] = [];
   const out = await runSpecialists({
-    payload, rules: DEFAULT_RULES, docs: [], cap: 80000,
-    ask: async (role, system, user) => {
+    payload, rules: DEFAULT_RULES, docs: [] as Wire[], cap: 80000,
+    ask: async (role: Wire, system: Wire, user: Wire) => {
       asked.push(role);
       assert.match(user, /<untrusted source="diff">/);
       if (role === 'business') assert.match(user, /clase: blocker/);
@@ -81,10 +82,10 @@ test('runSpecialists calls a mocked model once per role and stops at the budget 
 });
 
 test('an ignored or failed answer is not asked again', async () => {
-  const asked = [];
+  const asked: Wire[] = [];
   const out = await runSpecialists({
-    payload: { class: 'blocker', patches: [patch('src/lib/a.ts')] }, rules: DEFAULT_RULES, docs: [], cap: 80000,
-    ask: async (role) => { asked.push(role); return role === 'business' ? { failed: true } : { parsed: { summary: 'x' } }; },
+    payload: { class: 'blocker', patches: [patch('src/lib/a.ts')] }, rules: DEFAULT_RULES, docs: [] as Wire[], cap: 80000,
+    ask: async (role: Wire) => { asked.push(role); return role === 'business' ? { failed: true } : { parsed: { summary: 'x' } }; },
   });
   assert.deepEqual(asked, ['business', 'tests']);
   assert.deepEqual(out.skipped, { business: 'call_failed', tests: 'ignored' });

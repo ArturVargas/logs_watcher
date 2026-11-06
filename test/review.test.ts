@@ -1,3 +1,4 @@
+import type { Wire } from '../src/types.js';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
@@ -34,13 +35,13 @@ const PATCH = [
 ].join('\n');
 const dir = mkdtempSync(join(tmpdir(), 'lw-review-'));
 const keyPath = join(dir, 'app.pem');
-const state = { requests: [], comments: [] };
-let db;
-let stub;
-let stubUrl;
-let realFetch;
+const state: Wire = { requests: [] as Wire[], comments: [] as Wire[] };
+let db: Wire;
+let stub: Wire;
+let stubUrl: Wire;
+let realFetch: Wire;
 
-function shape(finding) {
+function shape(finding: Wire) {
   assert.deepEqual(Object.keys(finding).sort(), ['file', 'line', 'message', 'rule_id', 'severity']);
 }
 
@@ -73,7 +74,7 @@ function target() {
   return { id: 'primary', active: true, github: { owner: 'acme', name: 'app', installationId: '77' } };
 }
 
-function send(res, status, payload) {
+function send(res: Wire, status: Wire, payload: Wire) {
   const body = JSON.stringify(payload);
   res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
   res.end(body);
@@ -99,16 +100,16 @@ async function enqueue() {
   );
 }
 
-function reviewOpts(run) {
+function reviewOpts(run: Wire) {
   return {
     githubApi: stubUrl,
     files: [vaultFile()],
-    available: (tool) => tool === 'slither',
+    available: (tool: Wire) => tool === 'slither',
     run: run ?? (async () => ({ ran: true, stdout: slitherStdout() })),
   };
 }
 
-function gitLocal(cwd, args) {
+function gitLocal(cwd: Wire, args: Wire) {
   const result = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'git failed');
   return result.stdout.trim();
@@ -169,8 +170,8 @@ test('a changed line maps to the enclosing symbol of the watched languages', () 
 });
 
 test('one check uses the first tool for that language and no invented linter', async () => {
-  const calls = [];
-  const run = async (tool, stdout) => {
+  const calls: Wire[] = [];
+  const run = async (tool: Wire, stdout: Wire) => {
     calls.push(tool);
     return { ran: true, stdout };
   };
@@ -179,7 +180,7 @@ test('one check uses the first tool for that language and no invented linter', a
     language: 'solidity',
     file: 'C.sol',
     available: () => true,
-    run: (tool) => run(tool, tool === 'slither' ? '{"results":{"detectors":[{"check":"reentrancy-eth","impact":"High","description":"reentered","elements":[{"source_mapping":{"filename_relative":"C.sol","lines":[3]}}]}]}}' : ''),
+    run: (tool: Wire) => run(tool, tool === 'slither' ? '{"results":{"detectors":[{"check":"reentrancy-eth","impact":"High","description":"reentered","elements":[{"source_mapping":{"filename_relative":"C.sol","lines":[3]}}]}]}}' : ''),
   });
   assert.deepEqual(calls, ['slither']);
   shape(check.findings[0]);
@@ -192,7 +193,7 @@ test('one check uses the first tool for that language and no invented linter', a
     language: 'solidity',
     file: 'C.sol',
     available: () => true,
-    run: async (tool) => {
+    run: async (tool: Wire) => {
       calls.push(tool);
       if (tool !== 'aderyn') return { ran: false, stdout: '' };
       return { ran: true, stdout: '{"high_issues":{"issues":[{"detector_name":"delegate-call-in-loop","description":"delegatecall","instances":[{"contract_path":"C.sol","line_no":4}]}]}}' };
@@ -206,8 +207,8 @@ test('one check uses the first tool for that language and no invented linter', a
   check = await oneCheck({
     language: 'solidity',
     file: 'C.sol',
-    available: (tool) => tool === 'solhint',
-    run: async (tool) => {
+    available: (tool: Wire) => tool === 'solhint',
+    run: async (tool: Wire) => {
       calls.push(tool);
       return { ran: true, stdout: '[{"filePath":"C.sol","errors":[{"line":3,"ruleId":"compiler-version","severity":2,"message":"version"}]}]' };
     },
@@ -219,8 +220,8 @@ test('one check uses the first tool for that language and no invented linter', a
   check = await oneCheck({
     language: 'rust',
     file: 'src/lib.rs',
-    available: (tool) => tool !== 'clippy',
-    run: async (tool) => {
+    available: (tool: Wire) => tool !== 'clippy',
+    run: async (tool: Wire) => {
       calls.push(tool);
       return { ran: true, stdout: '{"vulnerabilities":{"list":[{"advisory":{"id":"RUSTSEC-2020-0001","title":"overflow","severity":"high"}}]}}' };
     },
@@ -232,8 +233,8 @@ test('one check uses the first tool for that language and no invented linter', a
   check = await oneCheck({
     language: 'rust',
     file: 'src/lib.rs',
-    available: (tool) => tool === 'cargo-deny',
-    run: async (tool) => {
+    available: (tool: Wire) => tool === 'cargo-deny',
+    run: async (tool: Wire) => {
       calls.push(tool);
       return { ran: true, stdout: '{"type":"diagnostic","fields":{"code":"A007","severity":"warning","message":"advisory was not encountered","labels":[{"line":4}]}}\n' };
     },
@@ -248,8 +249,8 @@ test('one check uses the first tool for that language and no invented linter', a
   check = await oneCheck({
     language: 'typescript',
     file: 'a.ts',
-    available: (tool) => tool === 'eslint',
-    run: async (tool) => {
+    available: (tool: Wire) => tool === 'eslint',
+    run: async (tool: Wire) => {
       calls.push(tool);
       return { ran: true, stdout: '[{"filePath":"/repo/a.ts","messages":[{"ruleId":"no-unused-vars","severity":2,"message":"x is unused","line":2}]}]' };
     },
@@ -263,8 +264,8 @@ test('one check uses the first tool for that language and no invented linter', a
   check = await oneCheck({
     language: 'typescript',
     file: 'a.ts',
-    available: (tool) => tool === 'tsc',
-    run: async (tool) => {
+    available: (tool: Wire) => tool === 'tsc',
+    run: async (tool: Wire) => {
       calls.push(tool);
       return { ran: true, stdout: 'a.ts(2,1): error TS2322: bad assignment\n' };
     },
@@ -297,7 +298,7 @@ test('dry run keeps the cited finding and does not call GitHub', async () => {
   const real = globalThis.fetch;
   try {
     for (const flag of [undefined, 'true', 'FALSE', 'false ', 'no']) {
-      const calls = [];
+      const calls: Wire[] = [];
       globalThis.fetch = async () => { calls.push('fetch'); throw new Error('fetch'); };
       if (flag === undefined) delete process.env.LOGS_WATCHER_DRY_RUN;
       else process.env.LOGS_WATCHER_DRY_RUN = flag;
@@ -326,11 +327,11 @@ test('dry run keeps the cited finding and does not call GitHub', async () => {
     number: 7,
     sha: SHA,
     files: [vaultFile()],
-    available: (tool) => tool === 'slither',
+    available: (tool: Wire) => tool === 'slither',
     run: async () => ({ ran: true, stdout: JSON.stringify({ results: { detectors: [{ check: 'missing-zero-check', impact: 'Low', description: 'elsewhere', elements: [{ source_mapping: { filename_relative: 'contracts/Vault.sol', lines: [6] } }] }] } }) }),
   });
   assert.equal(missed.finding, null);
-  const calls = [];
+  const calls: Wire[] = [];
   const other = await reviewPullRequest({
     target: target(),
     number: 7,
@@ -342,7 +343,7 @@ test('dry run keeps the cited finding and does not call GitHub', async () => {
       { path: 'z.rs', patch: '@@ -1 +1 @@\n-a\n+fn broken() {}\n', content: 'fn broken() {}\n' },
     ],
     available: () => true,
-    run: async (tool, input) => {
+    run: async (tool: Wire, input: Wire) => {
       calls.push(`${tool}:${input.file}`);
       if (tool === 'slither') return { ran: true, stdout: slitherStdout() };
       return { ran: true, stdout: '[]' };
@@ -357,10 +358,10 @@ before(async () => {
   writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }));
   process.env.GITHUB_APP_ID = '12345';
   process.env.GITHUB_APP_PRIVATE_KEY_PATH = keyPath;
-  stub = http.createServer((req, res) => {
+  stub = http.createServer((req: Wire, res: Wire) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     let raw = '';
-    req.on('data', (chunk) => { raw += chunk; });
+    req.on('data', (chunk: Wire) => { raw += chunk; });
     req.on('end', () => {
       let body = null;
       if (raw) {
@@ -384,7 +385,7 @@ before(async () => {
   stubUrl = `http://127.0.0.1:${port}`;
   db = await openTestDb();
   realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url: Wire, opts: Wire) => {
     if (String(url).startsWith('https://api.github.com')) throw new Error(`live github call ${url}`);
     return realFetch(url, opts);
   };
@@ -416,7 +417,7 @@ test('a non-false dry run stores the finding and publishes nothing', async () =>
     if (flag === undefined) delete process.env.LOGS_WATCHER_DRY_RUN;
     else process.env.LOGS_WATCHER_DRY_RUN = flag;
     await enqueue();
-    await runOnce(db.pool, reviewOpts());
+    await runOnce(db.pool, (reviewOpts as Wire)());
     assert.equal(state.requests.length, 0, String(flag));
     const job = await db.pool.query(`SELECT state, payload FROM jobs`);
     assert.equal(job.rows[0].state, 'done');
@@ -430,8 +431,8 @@ test('a non-false dry run stores the finding and publishes nothing', async () =>
 test('false publishes one inline comment that cites the finding', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   await enqueue();
-  await runOnce(db.pool, reviewOpts());
-  const posts = state.requests.filter((req) => req.method === 'POST' && req.path === '/repos/acme/app/pulls/7/comments');
+  await runOnce(db.pool, (reviewOpts as Wire)());
+  const posts = state.requests.filter((req: Wire) => req.method === 'POST' && req.path === '/repos/acme/app/pulls/7/comments');
   assert.equal(posts.length, 1);
   assert.equal(posts[0].body.path, 'contracts/Vault.sol');
   assert.equal(posts[0].body.line, 3);
@@ -440,7 +441,7 @@ test('false publishes one inline comment that cites the finding', async () => {
   assert.match(posts[0].body.body, /`contracts\/Vault.sol:2` `reentrancy-eth`/);
   assert.equal(posts[0].body.body.includes('missing-zero-check'), false);
   assert.equal(posts[0].body.body.includes('ghp_'), false);
-  assert.equal(state.requests.some((req) => req.method === 'PATCH' || String(req.path).includes('merge') || req.path === '/repos/acme/app/issues'), false);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'PATCH' || String(req.path).includes('merge') || req.path === '/repos/acme/app/issues'), false);
   const job = await db.pool.query(`SELECT state FROM jobs`);
   assert.equal(job.rows[0].state, 'done');
 });
@@ -459,9 +460,9 @@ test('an existing citation is not posted again', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   state.comments = [{ body: '`contracts/Vault.sol:2` `reentrancy-eth`\nalready' }];
   await enqueue();
-  await runOnce(db.pool, reviewOpts());
-  assert.equal(state.requests.some((req) => req.method === 'GET' && req.path.endsWith('/comments')), true);
-  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments')).length, 0);
+  await runOnce(db.pool, (reviewOpts as Wire)());
+  assert.equal(state.requests.some((req: Wire) => req.method === 'GET' && req.path.endsWith('/comments')), true);
+  assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments')).length, 0);
   assert.equal(state.comments.length, 1);
 });
 
@@ -472,27 +473,27 @@ test('the pull request file list is fetched and still publishes one comment', as
   await enqueue();
   await runOnce(db.pool, {
     githubApi: stubUrl,
-    available: (tool) => tool === 'slither',
+    available: (tool: Wire) => tool === 'slither',
     run: async () => ({ ran: true, stdout: slitherStdout() }),
   });
-  const posts = state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments'));
+  const posts = state.requests.filter((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments'));
   assert.equal(posts.length, 1);
   assert.equal(posts[0].body.line, 3);
   assert.match(posts[0].body.body, /`contracts\/Vault.sol:2` `reentrancy-eth`/);
-  assert.equal(state.requests.some((req) => req.path === '/repos/acme/app/pulls/7/files'), true);
-  assert.equal(state.requests.some((req) => req.method === 'PATCH' || String(req.path).includes('merge')), false);
+  assert.equal(state.requests.some((req: Wire) => req.path === '/repos/acme/app/pulls/7/files'), true);
+  assert.equal(state.requests.some((req: Wire) => req.method === 'PATCH' || String(req.path).includes('merge')), false);
 });
 
 test('typescript and rust tools run in the checked out tree', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
-  const checkouts = [];
-  const runs = [];
-  const checkout = async (input) => {
+  const checkouts: Wire[] = [];
+  const runs: Wire[] = [];
+  const checkout = async (input: Wire) => {
     checkouts.push({ ...input });
     writeFileSync(join(input.dir, 'marker'), 'tree');
     return true;
   };
-  const ts = (path, name) => ({
+  const ts = (path: Wire, name: Wire) => ({
     path,
     content: `export function ${name}() {\n  return 1;\n}\n`,
     patch: `@@ -0,0 +1,3 @@\n+export function ${name}() {\n+  return 1;\n+}\n`,
@@ -502,8 +503,8 @@ test('typescript and rust tools run in the checked out tree', async () => {
     githubApi: stubUrl,
     files: [ts('a.ts', 'first'), ts('b.ts', 'second')],
     checkout,
-    available: (tool, ctx) => tool === 'eslint' && existsSync(join(ctx.repoDir, 'marker')),
-    run: async (tool, ctx) => {
+    available: (tool: Wire, ctx: Wire) => tool === 'eslint' && existsSync(join(ctx.repoDir, 'marker')),
+    run: async (tool: Wire, ctx: Wire) => {
       runs.push({ tool, file: ctx.file, repoDir: ctx.repoDir });
       if (ctx.file === 'a.ts') return { ran: true, stdout: '[]' };
       return { ran: true, stdout: '[{"filePath":"/repo/b.ts","messages":[{"ruleId":"no-unused-vars","severity":2,"message":"x","line":2}]}]' };
@@ -514,10 +515,10 @@ test('typescript and rust tools run in the checked out tree', async () => {
   assert.equal(checkouts[0].name, 'app');
   assert.equal(checkouts[0].sha, SHA);
   assert.equal(checkouts[0].token, 'ghs_test');
-  assert.deepEqual(runs.map((item) => `${item.tool}:${item.file}`), ['eslint:a.ts', 'eslint:b.ts']);
+  assert.deepEqual(runs.map((item: Wire) => `${item.tool}:${item.file}`), ['eslint:a.ts', 'eslint:b.ts']);
   assert.equal(runs[0].repoDir, checkouts[0].dir);
   assert.equal(runs[1].repoDir, checkouts[0].dir);
-  const posts = state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments'));
+  const posts = state.requests.filter((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments'));
   assert.equal(posts.length, 1);
   assert.match(posts[0].body.body, /`b.ts:2` `no-unused-vars`/);
 
@@ -529,15 +530,15 @@ test('typescript and rust tools run in the checked out tree', async () => {
     githubApi: stubUrl,
     files: [ts('web/app.ts', 'total')],
     checkout,
-    available: (tool, ctx) => tool === 'tsc' && ctx.repoDir === checkouts[0]?.dir,
-    run: async (tool, ctx) => {
+    available: (tool: Wire, ctx: Wire) => tool === 'tsc' && ctx.repoDir === checkouts[0]?.dir,
+    run: async (tool: Wire, ctx: Wire) => {
       assert.equal(tool, 'tsc');
       assert.equal(ctx.repoDir, checkouts[0].dir);
       return { ran: true, stdout: 'web/app.ts(2,3): error TS2322: bad\n' };
     },
   });
   assert.equal(checkouts.length, 1);
-  assert.match(state.requests.find((req) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`web\/app.ts:2` `TS2322`/);
+  assert.match(state.requests.find((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`web\/app.ts:2` `TS2322`/);
 
   await db.reset();
   state.requests.length = 0;
@@ -552,24 +553,24 @@ test('typescript and rust tools run in the checked out tree', async () => {
     githubApi: stubUrl,
     files: [rust],
     checkout,
-    available: (tool, ctx) => tool === 'cargo-deny' && ctx.repoDir === checkouts.at(-1)?.dir,
-    run: async (tool, ctx) => {
+    available: (tool: Wire, ctx: Wire) => tool === 'cargo-deny' && ctx.repoDir === checkouts.at(-1)?.dir,
+    run: async (tool: Wire, ctx: Wire) => {
       assert.equal(tool, 'cargo-deny');
       assert.equal(ctx.repoDir, checkouts[0].dir);
       return { ran: true, stdout: '{"type":"diagnostic","fields":{"code":"A007","severity":"warning","message":"advisory","labels":[{"line":2,"path":"src/lib.rs"}]}}\n' };
     },
   });
   assert.equal(checkouts.length, 1);
-  assert.match(state.requests.find((req) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`src\/lib.rs:2` `A007`/);
+  assert.match(state.requests.find((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments')).body.body, /`src\/lib.rs:2` `A007`/);
 });
 
 test('solidity stays on one file and dry run does not check out', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
   let calls = 0;
   await enqueue();
-  await runOnce(db.pool, { ...reviewOpts(), checkout: async () => { calls += 1; return true; } });
+  await runOnce(db.pool, { ...(reviewOpts as Wire)(), checkout: async () => { calls += 1; return true; } });
   assert.equal(calls, 0);
-  assert.equal(state.requests.filter((req) => req.method === 'POST' && req.path.endsWith('/comments')).length, 1);
+  assert.equal(state.requests.filter((req: Wire) => req.method === 'POST' && req.path.endsWith('/comments')).length, 1);
 
   await db.reset();
   state.requests.length = 0;
@@ -588,13 +589,13 @@ test('solidity stays on one file and dry run does not check out', async () => {
 
 test('another language runs no linter and publishes nothing', async () => {
   process.env.LOGS_WATCHER_DRY_RUN = 'false';
-  const calls = [];
+  const calls: Wire[] = [];
   await enqueue();
   await runOnce(db.pool, {
     githubApi: stubUrl,
     files: [{ path: 'README.md', patch: '@@ -1 +1 @@\n-a\n+b\n', content: 'b\n' }],
     available: () => true,
-    run: async (tool) => { calls.push(tool); return { ran: true, stdout: '' }; },
+    run: async (tool: Wire) => { calls.push(tool); return { ran: true, stdout: '' }; },
   });
   assert.deepEqual(calls, []);
   assert.equal(state.requests.length, 0);

@@ -1,3 +1,4 @@
+import type { Wire } from './types.js';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { enqueueClassify, enqueueReview, log, withTx } from './queue.js';
@@ -5,28 +6,28 @@ import { scrubJson } from './scrub.js';
 
 const MAX_BODY = 1_000_000;
 
-function header(req, name) {
+function header(req: Wire, name: Wire): Wire {
   const value = req.headers[name];
   return typeof value === 'string' ? value : '';
 }
 
-function sameHex(expected, got) {
+function sameHex(expected: Wire, got: Wire): Wire {
   const left = Buffer.from(String(expected).toLowerCase());
   const right = Buffer.from(String(got).toLowerCase());
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
 }
 
-function hmacHex(secret, body) {
+function hmacHex(secret: Wire, body: Wire): Wire {
   return createHmac('sha256', secret).update(body).digest('hex');
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
+function readBody(req: Wire): Wire {
+  return new Promise((resolve: Wire, reject: Wire) => {
+    const chunks: Wire[] = [] as Wire[];
     let size = 0;
     let tooBig = false;
-    req.on('data', (chunk) => {
+    req.on('data', (chunk: Wire) => {
       if (tooBig) return;
       size += chunk.length;
       if (size > MAX_BODY) {
@@ -38,17 +39,17 @@ function readBody(req) {
       chunks.push(chunk);
     });
     req.on('end', () => { if (!tooBig) resolve(Buffer.concat(chunks)); });
-    req.on('error', (err) => { if (!tooBig) reject(err); });
+    req.on('error', (err: Wire) => { if (!tooBig) reject(err); });
   });
 }
 
-function reject(res, status) {
+function reject(res: Wire, status: Wire): Wire {
   log({ level: 'warn', msg: 'webhook_rejected' });
   res.writeHead(status);
   res.end();
 }
 
-function issueId(resource, body) {
+function issueId(resource: Wire, body: Wire): Wire {
   const raw = resource === 'event_alert'
     ? body?.data?.issue?.id ?? body?.data?.event?.issue_id ?? body?.data?.event?.issue?.id
     : body?.data?.issue?.id;
@@ -56,12 +57,12 @@ function issueId(resource, body) {
   return /^[A-Za-z0-9._:-]{1,80}$/.test(id) ? id : null;
 }
 
-function accepted(resource, action) {
+function accepted(resource: Wire, action: Wire): Wire {
   if (resource === 'event_alert') return true;
   return resource === 'issue' && (action === 'created' || action === 'unresolved');
 }
 
-function storedPayload(value) {
+function storedPayload(value: Wire): Wire {
   if (value == null) return null;
   try {
     return JSON.stringify(scrubJson(value));
@@ -70,7 +71,7 @@ function storedPayload(value) {
   }
 }
 
-async function storeInbox(client, row) {
+async function storeInbox(client: Wire, row: Wire): Promise<Wire> {
   await client.query(
     `INSERT INTO inbox (delivery_id, source, target_id, received_at, payload, status, drop_reason)
      VALUES ($1, $2, $3, now(), $4::jsonb, $5, $6)`,
@@ -78,9 +79,9 @@ async function storeInbox(client, row) {
   );
 }
 
-async function handleSentry(req, res, pool, targetId, raw) {
+async function handleSentry(req: Wire, res: Wire, pool: Wire, targetId: Wire, raw: Wire): Promise<Wire> {
   const config = loadConfig();
-  const target = config.targets.find((item) => item.id === targetId);
+  const target = config.targets.find((item: Wire) => item.id === targetId);
   if (!target) {
     res.writeHead(404);
     res.end();
@@ -113,7 +114,7 @@ async function handleSentry(req, res, pool, targetId, raw) {
   const sentryIssueId = issueId(resource, body);
   const take = accepted(resource, body.action) && sentryIssueId && target.active;
   try {
-    await withTx(pool, async (client) => {
+    await withTx(pool, async (client: Wire) => {
       if (!target.active) {
         await storeInbox(client, { deliveryId, source: 'sentry', targetId: target.id, payload: body, status: 'target_inactive', dropReason: 'target_inactive' });
         return;
@@ -123,10 +124,10 @@ async function handleSentry(req, res, pool, targetId, raw) {
         return;
       }
       await storeInbox(client, { deliveryId, source: 'sentry', targetId: target.id, payload: body, status: 'accepted', dropReason: null });
-      await enqueueClassify(client, { target, sentryIssueId, deliveryId });
+      await enqueueClassify(client, { target: target!, sentryIssueId, deliveryId });
     });
-  } catch (err) {
-    if (err.code === '23505') {
+  } catch (err: unknown) {
+    if ((err as Wire).code === '23505') {
       res.writeHead(200);
       res.end();
       return;
@@ -149,7 +150,7 @@ async function handleSentry(req, res, pool, targetId, raw) {
   res.end();
 }
 
-async function handleGithub(req, res, pool, raw) {
+async function handleGithub(req: Wire, res: Wire, pool: Wire, raw: Wire): Promise<Wire> {
   // shortcut: only pull_request opened, synchronize, and reopened enqueue; other GitHub events stay in the inbox until they have a consumer.
   const secret = process.env.GITHUB_WEBHOOK_SECRET || '';
   const signature = header(req, 'x-hub-signature-256');
@@ -163,7 +164,7 @@ async function handleGithub(req, res, pool, raw) {
     reject(res, 401);
     return;
   }
-  let body = {};
+  let body: Wire = {};
   try {
     body = JSON.parse(raw.toString('utf8') || '{}');
   } catch {
@@ -173,18 +174,18 @@ async function handleGithub(req, res, pool, raw) {
   const config = loadConfig();
   const owner = body?.repository?.owner?.login ?? '';
   const name = body?.repository?.name ?? '';
-  const target = config.targets.find((item) => item.active && item.github.owner === owner && item.github.name === name);
+  const target = config.targets.find((item: Wire) => item.active && item.github.owner === owner && item.github.name === name);
   const action = body?.action;
   const number = Number(body?.pull_request?.number);
   const sha = String(body?.pull_request?.head?.sha ?? '').toLowerCase();
-  const review = header(req, 'x-github-event') === 'pull_request'
+  const review: Wire = header(req, 'x-github-event') === 'pull_request'
     && (action === 'opened' || action === 'synchronize' || action === 'reopened')
     && target
     && Number.isInteger(number)
     && number > 0
     && /^[0-9a-f]{40}$/.test(sha);
   try {
-    await withTx(pool, async (client) => {
+    await withTx(pool, async (client: Wire) => {
       await storeInbox(client, {
         deliveryId: delivery,
         source: 'github',
@@ -193,10 +194,10 @@ async function handleGithub(req, res, pool, raw) {
         status: 'stored',
         dropReason: null,
       });
-      if (review) await enqueueReview(client, { target, deliveryId: delivery, number, sha });
+      if (review) await enqueueReview(client, { target: target!, deliveryId: delivery, number, sha });
     });
-  } catch (err) {
-    if (err.code === '23505') {
+  } catch (err: unknown) {
+    if ((err as Wire).code === '23505') {
       res.writeHead(200);
       res.end();
       return;
@@ -207,7 +208,7 @@ async function handleGithub(req, res, pool, raw) {
   res.end();
 }
 
-export async function handleWebhook(req, res, pool) {
+export async function handleWebhook(req: Wire, res: Wire, pool: Wire): Promise<Wire> {
   const path = new URL(req.url, 'http://localhost').pathname;
   const sentry = path.match(/^\/webhooks\/sentry\/([a-z0-9][a-z0-9-]{0,39})$/);
   if (req.method !== 'POST' || (!sentry && path !== '/webhooks/github')) {
@@ -224,8 +225,8 @@ export async function handleWebhook(req, res, pool) {
   let raw;
   try {
     raw = await readBody(req);
-  } catch (err) {
-    if (err.code === 'TOO_LARGE') {
+  } catch (err: unknown) {
+    if ((err as Wire).code === 'TOO_LARGE') {
       reject(res, 413);
       req.destroy();
       return;
