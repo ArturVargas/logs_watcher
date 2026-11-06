@@ -5,7 +5,6 @@ docs
 template
 templates
 standards
-test
 deploy
 Dockerfile
 .dockerignore
